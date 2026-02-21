@@ -19,6 +19,8 @@ import (
 	"github.com/micro-nova/amplipi-go/internal/controller"
 	"github.com/micro-nova/amplipi-go/internal/events"
 	"github.com/micro-nova/amplipi-go/internal/hardware"
+	"github.com/micro-nova/amplipi-go/internal/models"
+	"github.com/micro-nova/amplipi-go/internal/streams"
 )
 
 func main() {
@@ -77,12 +79,31 @@ func main() {
 	// Event bus
 	bus := events.NewBus()
 
+	// Stream manager
+	// configDir for streams is ~/.config/amplipi/srcs/
+	streamsConfigDir := filepath.Join(*cfgDir, "srcs")
+	if err := os.MkdirAll(streamsConfigDir, 0755); err != nil {
+		slog.Error("cannot create streams config directory", "path", streamsConfigDir, "err", err)
+		os.Exit(1)
+	}
+
+	// ctrlRef is used by the stream metadata callback to forward updates.
+	// It is set after controller creation; callbacks only fire during stream
+	// activity which happens after initialization.
+	var ctrlRef *controller.Controller
+	streamMgr := streams.NewManager(streamsConfigDir, func(id int, info models.StreamInfo) {
+		if ctrlRef != nil {
+			ctrlRef.UpdateStreamInfo(id, info)
+		}
+	})
+
 	// Controller
-	ctrl, err := controller.New(hw, store, bus)
+	ctrl, err := controller.New(hw, store, bus, streamMgr)
 	if err != nil {
 		slog.Error("controller initialization failed", "err", err)
 		os.Exit(1)
 	}
+	ctrlRef = ctrl // safe: controller is initialized before any stream callbacks fire
 
 	// Auth service
 	authSvc, err := auth.NewService(*cfgDir)
@@ -116,14 +137,19 @@ func main() {
 	<-ctx.Done()
 	slog.Info("shutting down...")
 
+	// Shutdown stream manager
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer shutCancel()
+	if err := streamMgr.Shutdown(shutCtx); err != nil {
+		slog.Warn("stream manager shutdown error", "err", err)
+	}
+
 	// Flush pending config writes
 	if err := store.Flush(); err != nil {
 		slog.Warn("failed to flush config", "err", err)
 	}
 
 	// Graceful HTTP shutdown
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutCancel()
 	if err := srv.Shutdown(shutCtx); err != nil {
 		slog.Warn("server shutdown error", "err", err)
 	}

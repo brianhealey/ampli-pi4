@@ -10,32 +10,36 @@ import (
 	"github.com/micro-nova/amplipi-go/internal/events"
 	"github.com/micro-nova/amplipi-go/internal/hardware"
 	"github.com/micro-nova/amplipi-go/internal/models"
+	"github.com/micro-nova/amplipi-go/internal/streams"
 )
 
 // Controller is the central state machine for AmpliPi.
 // All state mutations go through the apply() method which ensures
 // atomicity, persistence, and event publishing.
 type Controller struct {
-	mu    sync.RWMutex
-	state models.State
-	hw    hardware.Driver
-	store config.Store
-	bus   *events.Bus
+	mu      sync.RWMutex
+	state   models.State
+	hw      hardware.Driver
+	store   config.Store
+	bus     *events.Bus
+	streams *streams.Manager
 }
 
 // New creates and initializes a new Controller.
 // Loads state from the store and applies it to hardware.
-func New(hw hardware.Driver, store config.Store, bus *events.Bus) (*Controller, error) {
+// mgr may be nil (streams subsystem disabled).
+func New(hw hardware.Driver, store config.Store, bus *events.Bus, mgr *streams.Manager) (*Controller, error) {
 	state, err := store.Load()
 	if err != nil {
 		return nil, err
 	}
 
 	c := &Controller{
-		state: *state,
-		hw:    hw,
-		store: store,
-		bus:   bus,
+		state:   *state,
+		hw:      hw,
+		store:   store,
+		bus:     bus,
+		streams: mgr,
 	}
 
 	// Apply initial state to hardware
@@ -45,7 +49,29 @@ func New(hw hardware.Driver, store config.Store, bus *events.Bus) (*Controller, 
 		_ = err
 	}
 
+	// Sync initial stream state if manager is available
+	if c.streams != nil {
+		if err := c.streams.Sync(ctx, state.Streams, state.Sources); err != nil {
+			// Not fatal — log and continue
+			_ = err
+		}
+	}
+
 	return c, nil
+}
+
+// UpdateStreamInfo updates a stream's metadata. Called by the stream Manager
+// when a stream's playback state changes.
+func (c *Controller) UpdateStreamInfo(id int, info models.StreamInfo) {
+	_, _ = c.apply(func(s *models.State) error {
+		for i := range s.Streams {
+			if s.Streams[i].ID == id {
+				s.Streams[i].Info = info
+				return nil
+			}
+		}
+		return nil
+	})
 }
 
 // State returns a deep copy of the current system state.
@@ -59,7 +85,7 @@ func (c *Controller) State() models.State {
 //  1. Acquires the write lock
 //  2. Makes a deep copy of current state
 //  3. Calls fn to modify the copy (fn may return an error to abort)
-//  4. If fn succeeds: updates state, schedules save, publishes event
+//  4. If fn succeeds: updates state, schedules save, publishes event, syncs streams
 func (c *Controller) apply(fn func(*models.State) error) (models.State, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -72,6 +98,17 @@ func (c *Controller) apply(fn func(*models.State) error) (models.State, error) {
 	c.state = next
 	_ = c.store.Save(&c.state) // debounced, async
 	c.bus.Publish(c.state)
+
+	// Sync stream manager with updated state (non-blocking: runs in background)
+	if c.streams != nil {
+		go func(streams_ []models.Stream, sources_ []models.Source) {
+			if err := c.streams.Sync(context.Background(), streams_, sources_); err != nil {
+				// Log but don't fail the apply
+				_ = err
+			}
+		}(next.Streams, next.Sources)
+	}
+
 	return c.state, nil
 }
 

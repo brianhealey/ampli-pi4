@@ -41,3 +41,27 @@ const (
 	RCAStream2  = 998
 	RCAStream3  = 999
 )
+
+// ConfigString extracts a string config field safely.
+func (s *Stream) ConfigString(key string) string {
+	if s.Config == nil {
+		return ""
+	}
+	v, _ := s.Config[key].(string)
+	return v
+}
+
+// ConfigInt extracts an int config field safely.
+// Returns def if the key is missing or not an integer.
+func (s *Stream) ConfigInt(key string, def int) int {
+	if s.Config == nil {
+		return def
+	}
+	switch v := s.Config[key].(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	}
+	return def
+}

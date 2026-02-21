@@ -109,24 +109,48 @@ func (c *Controller) DeleteStream(_ context.Context, id int) (models.State, *mod
 }
 
 // ExecStreamCommand executes a command on a stream (play, pause, next, etc.)
-// Phase 3 will implement per-stream subprocess commands.
-// For now, this is a stub that updates stream state.
-func (c *Controller) ExecStreamCommand(_ context.Context, id int, cmd string) (models.State, *models.AppError) {
+// When a stream Manager is available, routes the command to the stream subprocess
+// and returns the current state (stream info is updated asynchronously via
+// UpdateStreamInfo callbacks from the subprocess).
+// When no Manager is available (nil, used in tests/mock mode), falls back to
+// direct state mutation for the standard play/pause/stop commands.
+func (c *Controller) ExecStreamCommand(ctx context.Context, id int, cmd string) (models.State, *models.AppError) {
+	// Validate that the stream exists first
+	c.mu.RLock()
+	stream := findStream(&c.state, id)
+	c.mu.RUnlock()
+	if stream == nil {
+		return models.State{}, models.ErrNotFound(fmt.Sprintf("stream %d not found", id))
+	}
+
+	// Route to stream manager if available
+	if c.streams != nil {
+		if err := c.streams.SendCmd(ctx, id, cmd); err != nil {
+			return models.State{}, models.ErrInternal(fmt.Sprintf("stream command failed: %v", err))
+		}
+		// State is updated asynchronously via UpdateStreamInfo; return current snapshot.
+		c.mu.RLock()
+		state := c.state.DeepCopy()
+		c.mu.RUnlock()
+		return state, nil
+	}
+
+	// Fallback: no Manager configured — update state directly.
+	// Handles play/pause/stop in tests and mock/standalone mode.
 	state, err := c.apply(func(s *models.State) error {
-		stream := findStream(s, id)
-		if stream == nil {
+		st := findStream(s, id)
+		if st == nil {
 			return models.ErrNotFound(fmt.Sprintf("stream %d not found", id))
 		}
-		// TODO Phase 3: route command to stream subprocess
 		switch cmd {
 		case "play":
-			stream.Info.State = "playing"
+			st.Info.State = "playing"
 		case "pause":
-			stream.Info.State = "paused"
+			st.Info.State = "paused"
 		case "stop":
-			stream.Info.State = "stopped"
+			st.Info.State = "stopped"
 		default:
-			// Accept but ignore unknown commands for now
+			// Accept but ignore unknown commands in fallback mode
 		}
 		return nil
 	})
