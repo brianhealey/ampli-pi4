@@ -2,8 +2,10 @@ package streams
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -140,6 +142,11 @@ func (s *Supervisor) supervise(ctx context.Context) {
 		slog.Info("supervisor: starting process", "name", s.name, "cmd", cmd.Path)
 
 		if err := cmd.Start(); err != nil {
+			// Binary not found is permanent — no point retrying
+			if errors.Is(err, exec.ErrNotFound) || isNotFoundError(err) {
+				slog.Error("supervisor: binary not found, giving up", "name", s.name, "cmd", cmd.Path, "err", err)
+				return
+			}
 			slog.Error("supervisor: failed to start process", "name", s.name, "err", err)
 			// Count as a fast-fail
 			s.mu.Lock()
@@ -252,4 +259,16 @@ func minDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+// isNotFoundError returns true if err indicates the binary was not found.
+// Catches both exec.ErrNotFound and the underlying "no such file or directory" / "executable not found" OS errors.
+func isNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "executable file not found") ||
+		strings.Contains(msg, "no such file or directory") ||
+		errors.Is(err, exec.ErrNotFound)
 }
