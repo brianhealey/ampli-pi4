@@ -105,6 +105,14 @@ func (m *Manager) Sync(ctx context.Context, modelStreams []models.Stream, source
 			if streamer.IsPersistent() {
 				if err := m.activateStream(ctx, state, stream.Name); err != nil {
 					slog.Error("stream manager: failed to activate persistent stream", "id", id, "err", err)
+					// Surface the error to the API so the stream shows a clear state
+					if m.onChange != nil {
+						m.onChange(id, models.StreamInfo{
+							Name:  stream.Name,
+							State: "unavailable",
+							Track: err.Error(),
+						})
+					}
 				}
 			}
 		}
