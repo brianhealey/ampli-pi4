@@ -112,7 +112,11 @@ func (ss *SubprocStream) connectBase(ctx context.Context, physSrc int) error {
 	if ss.loop != nil {
 		_ = ss.loop.Stop()
 	}
-	ss.loop = NewALSALoop(ss.vsrc, physSrc)
+	loop, err := NewALSALoop(ss.vsrc, physSrc)
+	if err != nil {
+		return fmt.Errorf("alsaloop creation failed: %w", err)
+	}
+	ss.loop = loop
 	return ss.loop.Start(ctx)
 }
 

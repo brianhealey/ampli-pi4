@@ -8,6 +8,28 @@ import (
 	"time"
 )
 
+// availablePhysicalOutputs stores which physical DAC outputs (ch0-ch3) exist.
+// Set by the stream manager during initialization.
+var availablePhysicalOutputs = []int{0} // default: ch0 only (HiFiBerry)
+
+// SetAvailablePhysicalOutputs configures which physical DAC outputs (ch0-ch3) are available.
+// Called by the stream manager during initialization with data from the hardware profile.
+func SetAvailablePhysicalOutputs(outputs []int) {
+	availablePhysicalOutputs = make([]int, len(outputs))
+	copy(availablePhysicalOutputs, outputs)
+	slog.Info("alsaloop: available physical outputs configured", "outputs", availablePhysicalOutputs)
+}
+
+// isPhysicalOutputAvailable checks if a physical source has a corresponding ALSA device.
+func isPhysicalOutputAvailable(physSrc int) bool {
+	for _, available := range availablePhysicalOutputs {
+		if available == physSrc {
+			return true
+		}
+	}
+	return false
+}
+
 // ALSALoop supervises an alsaloop process that bridges vsrc → physSrc.
 // Restarts on crash with exponential backoff.
 type ALSALoop struct {
@@ -17,13 +39,23 @@ type ALSALoop struct {
 }
 
 // NewALSALoop creates a new ALSALoop that will bridge vsrc to physSrc.
-func NewALSALoop(vsrc, physSrc int) *ALSALoop {
+// On v1 hardware (without USB DAC), falls back to ch0 for all sources,
+// allowing ALSA's dmix to mix multiple streams together.
+func NewALSALoop(vsrc, physSrc int) (*ALSALoop, error) {
+	// Fall back to ch0 if requested physical output doesn't exist (v1 hardware behavior)
+	actualPhysSrc := physSrc
+	if !isPhysicalOutputAvailable(physSrc) {
+		slog.Warn("alsaloop: physical output not available, falling back to ch0",
+			"requested", physSrc, "available", availablePhysicalOutputs)
+		actualPhysSrc = 0 // Fall back to HiFiBerry DAC (uses dmix for multiple streams)
+	}
+
 	a := &ALSALoop{
 		vsrc:    vsrc,
-		physSrc: physSrc,
+		physSrc: actualPhysSrc,
 	}
 	capture := VirtualCaptureDevice(vsrc)
-	playback := PhysicalOutputDevice(physSrc)
+	playback := PhysicalOutputDevice(actualPhysSrc)
 
 	a.sup = NewSupervisor("alsaloop", func() *exec.Cmd {
 		cmd := exec.Command(findBinary("alsaloop"),
@@ -41,7 +73,7 @@ func NewALSALoop(vsrc, physSrc int) *ALSALoop {
 	a.sup.backoff = 500 * time.Millisecond
 	a.sup.maxBackoff = 30 * time.Second
 
-	return a
+	return a, nil
 }
 
 // Start begins the alsaloop supervisor goroutine.

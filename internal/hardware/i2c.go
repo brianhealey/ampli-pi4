@@ -63,6 +63,16 @@ func (d *I2CDriver) Init(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// Reset the STM32 preamp board via GPIO before any I2C communication.
+	// This sequence:
+	//  1. Asserts NRST (GPIO4) low to reset the STM32
+	//  2. Sets BOOT0 (GPIO5) low for normal firmware boot
+	//  3. Releases NRST and waits 10ms for STM32 startup
+	// After reset, the STM32 firmware is ready to receive I2C address via UART.
+	if err := resetSTM32(false); err != nil {
+		return fmt.Errorf("i2c: STM32 reset failed: %w", err)
+	}
+
 	// Assign I2C address to the main preamp via UART.
 	// The STM32 firmware starts with no I2C address and waits for this.
 	// Protocol: send {0x41, 0x10, 0x0A} at 9600 baud on /dev/serial0.

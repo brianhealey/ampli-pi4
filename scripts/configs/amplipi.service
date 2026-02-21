@@ -14,5 +14,8 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=amplipi
 
+# Allow binding to privileged ports (< 1024) as non-root user
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
 [Install]
 WantedBy=multi-user.target

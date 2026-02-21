@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"embed"
 	"flag"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/micro-nova/amplipi-go/internal/api"
 	"github.com/micro-nova/amplipi-go/internal/auth"
 	"github.com/micro-nova/amplipi-go/internal/config"
@@ -27,6 +30,9 @@ import (
 	"github.com/micro-nova/amplipi-go/internal/streams"
 	"github.com/micro-nova/amplipi-go/internal/zeroconf"
 )
+
+//go:embed all:web/dist
+var webFiles embed.FS
 
 func main() {
 	var (
@@ -108,6 +114,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Configure physical outputs availability from hardware profile
+	streams.SetAvailablePhysicalOutputs(profile.AvailablePhysicalOutputs)
+
 	// ctrlRef is used by the stream metadata callback to forward updates.
 	// It is set after controller creation; callbacks only fire during stream
 	// activity which happens after initialization.
@@ -165,6 +174,15 @@ func main() {
 
 	// HTTP server
 	router := api.NewRouter(ctrl, authSvc, bus)
+
+	// Add web UI static file handler
+	webFS, err := fs.Sub(webFiles, "web/dist")
+	if err != nil {
+		slog.Error("failed to load web files", "err", err)
+		os.Exit(1)
+	}
+	router.(*chi.Mux).Handle("/*", http.FileServer(http.FS(webFS)))
+
 	srv := &http.Server{
 		Addr:         *addr,
 		Handler:      router,

@@ -17,5 +17,8 @@ require (
 	github.com/creack/goselect v0.1.2 // indirect
 	github.com/miekg/dns v1.1.27 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
+	golang.org/x/image v0.36.0 // indirect
 	golang.org/x/net v0.49.0 // indirect
+	periph.io/x/conn/v3 v3.7.2 // indirect
+	periph.io/x/host/v3 v3.8.5 // indirect
 )

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -126,6 +127,13 @@ type HardwareProfile struct {
 
 	// Firmware version on main unit
 	FirmwareVersion string // "Major.Minor-GitHash"
+
+	// AvailablePhysicalOutputs lists which ALSA physical output devices (ch0-ch3) exist.
+	// ch0 = HiFiBerry DAC (always present on main unit)
+	// ch1-ch3 = USB 8-channel DAC (AmpliPi v2 only)
+	// Older hardware: [0] only
+	// Newer hardware with USB DAC: [0, 1, 2, 3]
+	AvailablePhysicalOutputs []int
 }
 
 // HasMainUnit returns true if the profile contains a main (AP1_S4Z6) unit.
@@ -156,6 +164,17 @@ func (p *HardwareProfile) StreamAvailable(streamType string) bool {
 	for _, s := range p.Streams {
 		if s.Type == streamType {
 			return s.Available
+		}
+	}
+	return false
+}
+
+// PhysicalOutputAvailable returns true if the given physical output index has
+// a corresponding ALSA device (ch0-ch3).
+func (p *HardwareProfile) PhysicalOutputAvailable(physSrc int) bool {
+	for _, available := range p.AvailablePhysicalOutputs {
+		if available == physSrc {
+			return true
 		}
 	}
 	return false
@@ -229,6 +248,9 @@ func Detect(ctx context.Context, drv Driver) (*HardwareProfile, error) {
 
 	// Stream capabilities
 	p.Streams = detectStreamCapabilities()
+
+	// Physical output detection
+	p.AvailablePhysicalOutputs = detectPhysicalOutputs()
 
 	return p, nil
 }
@@ -350,6 +372,37 @@ func detectStreamCapabilities() []StreamCapability {
 	return caps
 }
 
+// detectPhysicalOutputs probes which ALSA physical output devices (ch0-ch3) exist.
+// Returns a list of available physical source indices.
+//
+// Hardware variants:
+//   - Older AmpliPi: only ch0 (HiFiBerry DAC) → [0]
+//   - AmpliPi v2 with USB DAC: ch0-ch3 → [0, 1, 2, 3]
+//
+// Detection method: Check if ALSA card "cmedia8chint" exists in /proc/asound/cards.
+// If present, ch1-ch3 are available. ch0 (HiFiBerry) is always available on main unit.
+func detectPhysicalOutputs() []int {
+	// ch0 (HiFiBerry DAC) is always available if main unit is present
+	available := []int{0}
+
+	// Check if USB 8-channel DAC (cmedia8chint) is present
+	cardsData, err := os.ReadFile("/proc/asound/cards")
+	if err != nil {
+		slog.Debug("detectPhysicalOutputs: cannot read /proc/asound/cards", "err", err)
+		return available
+	}
+
+	if strings.Contains(string(cardsData), "cmedia8chint") {
+		slog.Info("detectPhysicalOutputs: USB 8-channel DAC detected (cm edia8chint)")
+		// USB DAC provides ch1, ch2, ch3
+		available = append(available, 1, 2, 3)
+	} else {
+		slog.Info("detectPhysicalOutputs: no USB DAC detected, only ch0 (HiFiBerry) available")
+	}
+
+	return available
+}
+
 // MockProfile returns a realistic main-unit hardware profile for development and testing.
 func MockProfile() *HardwareProfile {
 	// Build mock stream capabilities with all types "available"
@@ -383,13 +436,14 @@ func MockProfile() *HardwareProfile {
 				Rev4Plus:  true,
 			},
 		},
-		TotalZones:      6,
-		TotalSources:    4,
-		IsStreamer:      false,
-		FanMode:         FanModePWM,
-		HV2Present:      false,
-		Display:         DisplayNone,
-		Streams:         mockStreams,
-		FirmwareVersion: "1.7-deadbeef",
+		TotalZones:                   6,
+		TotalSources:                 4,
+		IsStreamer:                   false,
+		FanMode:                      FanModePWM,
+		HV2Present:                   false,
+		Display:                      DisplayNone,
+		Streams:                      mockStreams,
+		FirmwareVersion:              "1.7-deadbeef",
+		AvailablePhysicalOutputs: []int{0}, // Mock mode: only ch0 by default (safer for testing)
 	}
 }

@@ -150,7 +150,11 @@ func (s *FMRadioStream) Connect(ctx context.Context, physSrc int) error {
 	if s.loop != nil {
 		_ = s.loop.Stop()
 	}
-	s.loop = NewALSALoop(s.vsrc, physSrc)
+	loop, err := NewALSALoop(s.vsrc, physSrc)
+	if err != nil {
+		return fmt.Errorf("alsaloop creation failed: %w", err)
+	}
+	s.loop = loop
 	return s.loop.Start(ctx)
 }
 
