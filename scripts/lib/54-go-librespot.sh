@@ -39,11 +39,9 @@ else
     log "Installing go-librespot ${_latest_tag} (installed: '${_installed_ver:-none}')"
 
     # Build the download URL from GitHub release assets
-    # Asset naming: go-librespot_linux_arm64 or go-librespot_linux_arm
-    # Releases may use a tarball: go-librespot_<tag>_linux_arm64.tar.gz
+    # Asset naming: go-librespot_linux_arm64.tar.gz (no version in filename)
     # Try tarball first, then bare binary
-    _ver_clean="${_latest_tag#v}"  # strip leading 'v' for some repos
-    _tarball_url="https://github.com/${_repo}/releases/download/${_latest_tag}/go-librespot_${_ver_clean}_${_asset_suffix}.tar.gz"
+    _tarball_url="https://github.com/${_repo}/releases/download/${_latest_tag}/go-librespot_${_asset_suffix}.tar.gz"
     _bin_url="https://github.com/${_repo}/releases/download/${_latest_tag}/go-librespot_${_asset_suffix}"
 
     _tmp_dir="$BUILD_DIR/go-librespot-download"

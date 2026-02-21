@@ -100,14 +100,14 @@ log "amplipi installed to $_bin_dst"
 record_done "amplipi binary"
 
 # ── Build amplipi-update (if present) ────────────────────────────────────────
-if [[ -d "$_repo_root/cmd/amplipi-update" ]]; then
+if [[ -d "$_repo_root/cmd/amplipi-update" ]] && [[ -n "$(find "$_repo_root/cmd/amplipi-update" -name '*.go' -print -quit)" ]]; then
     step "Building amplipi-update binary"
     _update_bin_dst="$INSTALL_PREFIX/bin/amplipi-update"
     "$_go_bin" build -ldflags="-s -w" -o "$_update_bin_dst" ./cmd/amplipi-update/...
     log "amplipi-update installed to $_update_bin_dst"
     record_done "amplipi-update binary"
 else
-    log "cmd/amplipi-update not found — skipping (add later)"
+    log "cmd/amplipi-update not found or empty — skipping (add later)"
 fi
 
 # ── Generate amplipi-display.service based on detected hardware ───────────────

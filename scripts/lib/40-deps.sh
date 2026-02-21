@@ -73,9 +73,10 @@ _deps=(
     libsbc-dev              # SBC codec for A2DP (bluez-alsa)
 
     # ── UPnP/DLNA (gmrender-resurrect) ──────────────────────────────────────
-    libgupnp-1.2-dev        # GUPnP UPnP stack (gmrender-resurrect)
+    libupnp-dev             # Portable UPnP SDK (gmrender-resurrect)
+    libgupnp-1.6-dev        # GUPnP UPnP stack (gmrender-resurrect)
     libgupnp-av-1.0-dev     # GUPnP AV profile (gmrender-resurrect)
-    libgssdp-1.2-dev        # SSDP (GUPnP dependency)
+    libgssdp-1.6-dev        # SSDP (GUPnP dependency)
 
     # ── Pandora (pianobar) ───────────────────────────────────────────────────
     libao-dev               # Audio output (pianobar)
