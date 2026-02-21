@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -30,10 +31,37 @@ func (c *Controller) GetSource(id int) (*models.Source, *models.AppError) {
 	return nil, models.ErrNotFound("source not found")
 }
 
+// validateSourceInput checks hardware capability constraints for a source input change.
+// Returns a non-nil error if the profile prohibits the requested input on this hardware.
+// Returns nil if profile is nil (no restrictions — used in tests/mock mode).
+func (c *Controller) validateSourceInput(input string) *models.AppError {
+	if c.profile == nil {
+		return nil
+	}
+	if c.profile.TotalSources == 0 {
+		return models.ErrBadRequest("this unit has no audio sources")
+	}
+	// Read the current state to resolve stream types
+	c.mu.RLock()
+	state := c.state
+	c.mu.RUnlock()
+	if isAnalogInput(input, &state) && !c.profile.HasMainUnit() {
+		return models.ErrBadRequest(fmt.Sprintf("analog input not supported on %s unit", c.profile.PrimaryUnitType()))
+	}
+	return nil
+}
+
 // SetSource updates a source by ID and returns the new state.
 func (c *Controller) SetSource(ctx context.Context, id int, upd models.SourceUpdate) (models.State, *models.AppError) {
 	if id < 0 || id > 3 {
 		return models.State{}, models.ErrBadRequest("source id must be 0-3")
+	}
+
+	// Validate hardware capability before applying
+	if upd.Input != nil {
+		if appErr := c.validateSourceInput(*upd.Input); appErr != nil {
+			return models.State{}, appErr
+		}
 	}
 
 	state, err := c.apply(func(s *models.State) error {

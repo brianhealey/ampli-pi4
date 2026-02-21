@@ -35,11 +35,12 @@ const (
 
 // Special stream IDs from Python defaults.
 const (
-	AuxStreamID = 995
-	RCAStream0  = 996
-	RCAStream1  = 997
-	RCAStream2  = 998
-	RCAStream3  = 999
+	AuxStreamID      = 995
+	RCAStream0       = 996
+	RCAStream1       = 997
+	RCAStream2       = 998
+	RCAStream3       = 999
+	RCAStreamBaseID  = RCAStream0 // base ID for RCA streams (use RCAStreamBaseID + i for 0-3)
 )
 
 // ConfigString extracts a string config field safely.

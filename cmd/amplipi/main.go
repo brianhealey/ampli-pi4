@@ -73,6 +73,22 @@ func main() {
 		}
 	}
 
+	// Hardware profile detection
+	profile, err := hardware.Detect(ctx, hw)
+	if err != nil {
+		slog.Warn("hardware detection failed, using mock defaults", "err", err)
+		profile = hardware.MockProfile()
+	}
+	slog.Info("hardware profile",
+		"units", len(profile.Units),
+		"zones", profile.TotalZones,
+		"sources", profile.TotalSources,
+		"fan_mode", profile.FanMode,
+		"display", profile.Display,
+		"firmware", profile.FirmwareVersion,
+	)
+	slog.Info("stream capabilities", "available", profile.AvailableStreamTypes())
+
 	// Config store
 	store := config.NewJSONStore(*cfgDir)
 
@@ -98,7 +114,7 @@ func main() {
 	})
 
 	// Controller
-	ctrl, err := controller.New(hw, store, bus, streamMgr)
+	ctrl, err := controller.New(hw, profile, store, bus, streamMgr)
 	if err != nil {
 		slog.Error("controller initialization failed", "err", err)
 		os.Exit(1)

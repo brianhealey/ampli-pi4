@@ -85,6 +85,12 @@ type Info struct {
 	UnitID   int    `json:"unit_id,omitempty"`
 	IsUpdate bool   `json:"is_update,omitempty"`
 	Offline  bool   `json:"offline"`
+	// Hardware info (populated at boot from detected hardware profile)
+	Units           int      `json:"units,omitempty"`            // total detected preamp units
+	Zones           int      `json:"zones,omitempty"`            // total zone count across all units
+	FirmwareVersion string   `json:"firmware_version,omitempty"` // e.g. "1.7-abc12345"
+	FanMode         string   `json:"fan_mode,omitempty"`         // "pwm", "linear", "external", "forced"
+	AvailableStreams []string `json:"available_streams,omitempty"` // stream types with binaries present
 }
 
 // State is the complete system state returned by GET /api.

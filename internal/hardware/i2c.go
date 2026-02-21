@@ -71,6 +71,19 @@ func (d *I2CDriver) Init(ctx context.Context) error {
 		return fmt.Errorf("i2c: no AmpliPi preamp units detected on %s", i2cDevPath)
 	}
 	d.units = detected
+
+	// Enforce digital-only mode on expander units (they have no analog hardware).
+	// Unit 0 is always the main unit; units 1+ are expanders.
+	for _, unit := range detected {
+		if unit > 0 {
+			fd, ok := d.fds[unit]
+			if ok {
+				// Write REG_SRC_AD = 0x00 (all digital) to expander unit
+				_ = d.rawWrite(fd, []byte{RegSrcAD, 0x0F}) // 0x0F = all 4 sources digital
+			}
+		}
+	}
+
 	return nil
 }
 

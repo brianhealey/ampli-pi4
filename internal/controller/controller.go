@@ -20,6 +20,7 @@ type Controller struct {
 	mu      sync.RWMutex
 	state   models.State
 	hw      hardware.Driver
+	profile *hardware.HardwareProfile // may be nil (no capability restrictions)
 	store   config.Store
 	bus     *events.Bus
 	streams *streams.Manager
@@ -27,8 +28,9 @@ type Controller struct {
 
 // New creates and initializes a new Controller.
 // Loads state from the store and applies it to hardware.
+// profile may be nil (no hardware capability restrictions — used in tests).
 // mgr may be nil (streams subsystem disabled).
-func New(hw hardware.Driver, store config.Store, bus *events.Bus, mgr *streams.Manager) (*Controller, error) {
+func New(hw hardware.Driver, profile *hardware.HardwareProfile, store config.Store, bus *events.Bus, mgr *streams.Manager) (*Controller, error) {
 	state, err := store.Load()
 	if err != nil {
 		return nil, err
@@ -37,6 +39,7 @@ func New(hw hardware.Driver, store config.Store, bus *events.Bus, mgr *streams.M
 	c := &Controller{
 		state:   *state,
 		hw:      hw,
+		profile: profile,
 		store:   store,
 		bus:     bus,
 		streams: mgr,

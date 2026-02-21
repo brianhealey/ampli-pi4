@@ -37,6 +37,12 @@ func (c *Controller) CreateStream(_ context.Context, req models.StreamCreate) (m
 		return models.State{}, models.ErrBadRequest("stream type is required")
 	}
 
+	// Reject stream types whose binary isn't installed on this hardware
+	if c.profile != nil && !c.profile.StreamAvailable(req.Type) {
+		return models.State{}, models.ErrBadRequest(
+			fmt.Sprintf("stream type %q is not available on this hardware", req.Type))
+	}
+
 	state, err := c.apply(func(s *models.State) error {
 		f := false
 		stream := models.Stream{

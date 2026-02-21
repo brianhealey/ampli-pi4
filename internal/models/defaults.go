@@ -1,10 +1,16 @@
 package models
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/micro-nova/amplipi-go/internal/hardware"
+)
 
 // DefaultState returns a minimal default system state — 4 sources, 6 zones, no groups/streams/presets.
-// This is the minimal state used when no config file is found.
+// This is the minimal state used when no config file is found or in tests.
 // Based on Python's defaults.py DEFAULT_CONFIG.
+//
+// For production use (profile-aware state), use DefaultStateFromProfile instead.
 func DefaultState() State {
 	sources := make([]Source, 4)
 	for i := range sources {
@@ -107,4 +113,73 @@ func ClampVol(vol, volMin, volMax int) int {
 		return volMax
 	}
 	return vol
+}
+
+// DefaultStateFromProfile returns the correct initial state for a given hardware profile.
+// Sources, zones, and default streams are derived from the detected hardware configuration.
+// If profile is nil, falls back to DefaultState() (mock single-main-unit profile).
+func DefaultStateFromProfile(p *hardware.HardwareProfile) State {
+	if p == nil {
+		return DefaultState()
+	}
+	return defaultStateForProfile(p)
+}
+
+// defaultStateForProfile builds sources, zones, and default streams from the hardware profile.
+func defaultStateForProfile(p *hardware.HardwareProfile) State {
+	var state State
+
+	// Sources: only present if main unit detected
+	if p.TotalSources > 0 {
+		for i := 0; i < p.TotalSources; i++ {
+			state.Sources = append(state.Sources, Source{
+				ID:    i,
+				Name:  fmt.Sprintf("Input %d", i+1),
+				Input: "",
+			})
+		}
+	}
+
+	// Zones: one per detected unit × 6 (skip streamer units — no zones)
+	for _, unit := range p.Units {
+		if unit.Board.UnitType == hardware.UnitTypeStreamer {
+			continue // streamer has no amplified zones
+		}
+		for z := 0; z < unit.ZoneCount; z++ {
+			zoneID := unit.ZoneBase + z
+			state.Zones = append(state.Zones, Zone{
+				ID:       zoneID,
+				Name:     fmt.Sprintf("Zone %d", zoneID+1),
+				SourceID: 0,
+				Mute:     true,
+				Vol:      MinVolDB,
+				VolF:     0.0,
+				VolMin:   MinVolDB,
+				VolMax:   MaxVolDB,
+				Disabled: false,
+			})
+		}
+	}
+
+	// Default streams: RCA inputs for main unit, none for streamer-only
+	if p.TotalSources > 0 {
+		f := false
+		for i := 0; i < p.TotalSources; i++ {
+			state.Streams = append(state.Streams, Stream{
+				ID:        RCAStream0 + i,
+				Name:      fmt.Sprintf("RCA %d", i+1),
+				Type:      StreamTypeRCA,
+				Disabled:  &f,
+				Browsable: &f,
+			})
+		}
+	}
+
+	state.Groups = []Group{}
+	state.Presets = []Preset{}
+	state.Info = Info{
+		Version: "0.0.1",
+		Offline: false,
+	}
+	return state
 }

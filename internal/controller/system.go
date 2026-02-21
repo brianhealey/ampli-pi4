@@ -6,11 +6,22 @@ import (
 	"github.com/micro-nova/amplipi-go/internal/models"
 )
 
-// GetInfo returns system information.
+// GetInfo returns system information, enriched with hardware profile data when available.
 func (c *Controller) GetInfo() models.Info {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.state.Info
+	info := c.state.Info
+	c.mu.RUnlock()
+
+	// Populate hardware profile fields if a profile is available
+	if c.profile != nil {
+		info.Units = len(c.profile.Units)
+		info.Zones = c.profile.TotalZones
+		info.FirmwareVersion = c.profile.FirmwareVersion
+		info.FanMode = c.profile.FanMode.String()
+		info.AvailableStreams = c.profile.AvailableStreamTypes()
+	}
+
+	return info
 }
 
 // FactoryReset resets the system to default state and pushes it to hardware.
@@ -18,7 +29,8 @@ func (c *Controller) FactoryReset(ctx context.Context) (models.State, *models.Ap
 	state, err := c.apply(func(s *models.State) error {
 		// Preserve the current version info
 		info := s.Info
-		*s = models.DefaultState()
+		// Use profile-aware default state if profile is available
+		*s = models.DefaultStateFromProfile(c.profile)
 		s.Info = info
 
 		// Push to hardware
