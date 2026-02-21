@@ -74,6 +74,18 @@ func NewRouter(ctrl Controller, authSvc *auth.Service, bus EventBus) http.Handle
 		r.Post("/api/factory_reset", h.factoryReset)
 		r.Post("/api/load", h.loadConfig)
 
+		// Hardware tests
+		r.Post("/api/test/preamp", h.testPreamp)
+		r.Post("/api/test/fans", h.testFans)
+
+		// Firmware (stub)
+		r.Post("/api/firmware/flash", h.flashFirmware)
+
+		// Backup/restore
+		r.Post("/api/backup", h.createBackup)
+		r.Get("/api/backup", h.listBackups)
+		r.Post("/api/restore", h.restoreBackup)
+
 		// SSE
 		r.Get("/api/subscribe", h.sseEvents)
 	})

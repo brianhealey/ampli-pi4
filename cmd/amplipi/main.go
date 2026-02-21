@@ -13,14 +13,19 @@ import (
 	"syscall"
 	"time"
 
+	"strconv"
+	"strings"
+
 	"github.com/micro-nova/amplipi-go/internal/api"
 	"github.com/micro-nova/amplipi-go/internal/auth"
 	"github.com/micro-nova/amplipi-go/internal/config"
 	"github.com/micro-nova/amplipi-go/internal/controller"
 	"github.com/micro-nova/amplipi-go/internal/events"
 	"github.com/micro-nova/amplipi-go/internal/hardware"
+	"github.com/micro-nova/amplipi-go/internal/maintenance"
 	"github.com/micro-nova/amplipi-go/internal/models"
 	"github.com/micro-nova/amplipi-go/internal/streams"
+	"github.com/micro-nova/amplipi-go/internal/zeroconf"
 )
 
 func main() {
@@ -128,6 +133,32 @@ func main() {
 		os.Exit(1)
 	}
 	defer authSvc.Close()
+
+	// Maintenance goroutines (online check, release check, config backups)
+	maint := maintenance.New(*cfgDir,
+		func(online bool) {
+			slog.Info("online status changed", "online", online)
+		},
+		func(release string) {
+			slog.Info("new release available", "version", release)
+		},
+	)
+	go maint.Start(ctx)
+
+	// Zeroconf mDNS registration
+	hostname, _ := os.Hostname()
+	port := 80
+	if parts := strings.SplitN(*addr, ":", 2); len(parts) == 2 && parts[1] != "" {
+		if p, err := strconv.Atoi(parts[1]); err == nil {
+			port = p
+		}
+	}
+	zc := zeroconf.New(hostname, port)
+	go func() {
+		if err := zc.Start(ctx); err != nil {
+			slog.Warn("zeroconf failed", "err", err)
+		}
+	}()
 
 	// Background goroutines
 	go hardware.RunPiTempSender(ctx, hw)

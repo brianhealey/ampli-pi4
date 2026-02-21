@@ -2,15 +2,21 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"time"
 
+	"github.com/micro-nova/amplipi-go/internal/hardware"
+	"github.com/micro-nova/amplipi-go/internal/identity"
 	"github.com/micro-nova/amplipi-go/internal/models"
 )
 
 // GetInfo returns system information, enriched with hardware profile data when available.
 func (c *Controller) GetInfo() models.Info {
-	c.mu.RLock()
-	info := c.state.Info
-	c.mu.RUnlock()
+	info := models.Info{
+		Version:  identity.GetVersion(),
+		IsUpdate: identity.IsUpdateMode(),
+		Offline:  !identity.GetOnlineStatus(),
+	}
 
 	// Populate hardware profile fields if a profile is available
 	if c.profile != nil {
@@ -22,6 +28,101 @@ func (c *Controller) GetInfo() models.Info {
 	}
 
 	return info
+}
+
+// TestPreamp runs a quick preamp self-test by reading the version registers from all units.
+func (c *Controller) TestPreamp(ctx context.Context) (map[string]interface{}, error) {
+	if c.hw == nil {
+		return map[string]interface{}{"ok": false, "error": "no hardware driver"}, nil
+	}
+
+	if c.profile == nil || len(c.profile.Units) == 0 {
+		return map[string]interface{}{
+			"ok":      true,
+			"details": "no preamp units detected (mock mode)",
+		}, nil
+	}
+
+	results := make([]map[string]interface{}, 0, len(c.profile.Units))
+	allOK := true
+
+	for _, unit := range c.profile.Units {
+		maj, err := c.hw.Read(ctx, unit.Index, hardware.RegVersionMaj)
+		if err != nil {
+			allOK = false
+			results = append(results, map[string]interface{}{
+				"unit":  unit.Index,
+				"ok":    false,
+				"error": err.Error(),
+			})
+			continue
+		}
+		min, err := c.hw.Read(ctx, unit.Index, hardware.RegVersionMin)
+		if err != nil {
+			allOK = false
+			results = append(results, map[string]interface{}{
+				"unit":  unit.Index,
+				"ok":    false,
+				"error": err.Error(),
+			})
+			continue
+		}
+		results = append(results, map[string]interface{}{
+			"unit":    unit.Index,
+			"ok":      true,
+			"version": fmt.Sprintf("%d.%d", maj, min),
+		})
+	}
+
+	return map[string]interface{}{
+		"ok":      allOK,
+		"details": fmt.Sprintf("tested %d unit(s)", len(c.profile.Units)),
+		"units":   results,
+	}, nil
+}
+
+// TestFans forces fans on for 3 seconds then returns to auto mode.
+func (c *Controller) TestFans(ctx context.Context) (map[string]interface{}, error) {
+	if c.hw == nil {
+		return map[string]interface{}{"ok": false, "error": "no hardware driver"}, nil
+	}
+
+	if c.profile == nil || len(c.profile.Units) == 0 {
+		return map[string]interface{}{
+			"ok":      true,
+			"details": "no preamp units detected (mock mode)",
+		}, nil
+	}
+
+	const fanFullDuty byte = 0xFF // 100% duty cycle
+	const fanAutoDuty byte = 0x00 // return to firmware-controlled auto
+
+	// Force fans on for all units
+	for _, unit := range c.profile.Units {
+		if err := c.hw.Write(ctx, unit.Index, hardware.RegFanDuty, fanFullDuty); err != nil {
+			return map[string]interface{}{
+				"ok":    false,
+				"error": fmt.Sprintf("failed to set fan duty on unit %d: %v", unit.Index, err),
+			}, nil
+		}
+	}
+
+	// Wait 3 seconds (respecting context cancellation)
+	select {
+	case <-time.After(3 * time.Second):
+	case <-ctx.Done():
+		return map[string]interface{}{"ok": false, "error": "context cancelled"}, nil
+	}
+
+	// Return to auto
+	for _, unit := range c.profile.Units {
+		_ = c.hw.Write(ctx, unit.Index, hardware.RegFanDuty, fanAutoDuty)
+	}
+
+	return map[string]interface{}{
+		"ok":      true,
+		"details": fmt.Sprintf("fans tested on %d unit(s), returned to auto", len(c.profile.Units)),
+	}, nil
 }
 
 // FactoryReset resets the system to default state and pushes it to hardware.

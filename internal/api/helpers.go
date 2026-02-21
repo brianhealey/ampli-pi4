@@ -47,6 +47,8 @@ type Controller interface {
 	GetInfo() models.Info
 	FactoryReset(ctx context.Context) (models.State, *models.AppError)
 	LoadConfig(ctx context.Context, incoming models.State) (models.State, *models.AppError)
+	TestPreamp(ctx context.Context) (map[string]interface{}, error)
+	TestFans(ctx context.Context) (map[string]interface{}, error)
 }
 
 // EventBus is the interface for subscribing to state change events.
