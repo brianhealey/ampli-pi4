@@ -3,6 +3,7 @@ package hardware
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"time"
@@ -247,15 +248,29 @@ func detectUnit(ctx context.Context, drv Driver, idx int) (UnitInfo, error) {
 
 	data, err := ReadEEPROMPage(pageCtx, drv, idx, 0, 0)
 	if err != nil {
-		// EEPROM read failed — assume unknown unit type, continue
-		info.Board = BoardInfo{UnitType: UnitTypeUnknown, BoardRev: "Rev?.?"}
-		info.HasAnalog = false
+		// EEPROM read failed — safe fallback based on position in chain:
+		// Unit 0 is always the main unit (4 sources + 6 zones).
+		// Units 1+ are expanders (6 zones only, no analog sources).
+		if idx == 0 {
+			slog.Warn("i2c: EEPROM unreadable on unit 0, assuming main unit (AP1_S4Z6)", "err", err)
+			info.Board = BoardInfo{UnitType: UnitTypeMain, BoardRev: "Rev?.?"}
+			info.HasAnalog = true
+		} else {
+			slog.Warn("i2c: EEPROM unreadable on expander, assuming expansion unit", "unit", idx, "err", err)
+			info.Board = BoardInfo{UnitType: UnitTypeExpansion, BoardRev: "Rev?.?"}
+			info.HasAnalog = false
+		}
 	} else {
 		board, parseErr := ParseBoardInfo(data)
 		if parseErr != nil {
-			// Bad format — treat as unknown
-			info.Board = BoardInfo{UnitType: UnitTypeUnknown, BoardRev: "Rev?.?"}
-			info.HasAnalog = false
+			// Unprogrammed/invalid EEPROM — same position-based fallback
+			if idx == 0 {
+				info.Board = BoardInfo{UnitType: UnitTypeMain, BoardRev: "Rev?.?"}
+				info.HasAnalog = true
+			} else {
+				info.Board = BoardInfo{UnitType: UnitTypeExpansion, BoardRev: "Rev?.?"}
+				info.HasAnalog = false
+			}
 		} else {
 			info.Board = board
 			info.HasAnalog = (board.UnitType == UnitTypeMain)

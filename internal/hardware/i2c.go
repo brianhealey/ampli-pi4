@@ -5,8 +5,12 @@ package hardware
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
+	"time"
+	"unsafe"
 
+	"go.bug.st/serial"
 	"golang.org/x/sys/unix"
 	"golang.org/x/time/rate"
 )
@@ -18,22 +22,39 @@ var devAddrs = []uint16{0x08, 0x10, 0x18, 0x20, 0x28, 0x30}
 const (
 	i2cDevPath   = "/dev/i2c-1"
 	i2cSlave     = 0x0703 // I2C_SLAVE ioctl
+	i2cRdwrIOCTL = 0x0707 // I2C_RDWR ioctl — combined write+read with REPEATED START
+	i2cMsgRD     = 0x0001 // i2c_msg flag: read direction
 	maxOpsPerSec = 500
 )
 
+// i2cMsg mirrors struct i2c_msg from linux/i2c.h
+type i2cMsg struct {
+	addr   uint16
+	flags  uint16
+	length uint16
+	_pad   uint16 // struct alignment
+	buf    uintptr
+}
+
+// i2cRdwr mirrors struct i2c_rdwr_ioctl_data from linux/i2c-dev.h
+type i2cRdwr struct {
+	msgs  uintptr
+	nmsgs uint32
+}
+
 // I2CDriver is the real hardware driver for the AmpliPi preamp board,
-// communicating via Linux I2C ioctl.
+// communicating via Linux I2C ioctl using I2C_RDWR for all transactions.
 type I2CDriver struct {
 	mu      sync.Mutex
-	fds     map[int]int // unit → file descriptor
-	units   []int
+	fd      int   // single shared fd for /dev/i2c-1
+	units   []int // detected unit indices
 	limiter *rate.Limiter
 }
 
 // NewI2C creates a new real I2C hardware driver.
 func NewI2C() *I2CDriver {
 	return &I2CDriver{
-		fds:     make(map[int]int),
+		fd:      -1,
 		limiter: rate.NewLimiter(rate.Limit(maxOpsPerSec), 10),
 	}
 }
@@ -42,45 +63,50 @@ func (d *I2CDriver) Init(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// Assign I2C address to the main preamp via UART.
+	// The STM32 firmware starts with no I2C address and waits for this.
+	// Protocol: send {0x41, 0x10, 0x0A} at 9600 baud on /dev/serial0.
+	//   0x41 = 'A' (header), 0x10 = address (8-bit), 0x0A = '\n' (terminator).
+	// The STM32 then initialises its I2C slave and forwards address+0x10 to
+	// the next expander unit in the daisy-chain.
+	if err := d.assignAddress(); err != nil {
+		slog.Warn("i2c: UART address assignment failed (preamp may already be addressed)", "err", err)
+	}
+	// Wait for the address to propagate through the expander chain (~5ms per unit).
+	time.Sleep(100 * time.Millisecond)
+
+	// Open a single shared fd for all I2C_RDWR transactions.
+	fd, err := unix.Open(i2cDevPath, unix.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("i2c: open %s: %w", i2cDevPath, err)
+	}
+	d.fd = fd
+
 	var detected []int
 	for unit, addr := range devAddrs {
-		fd, err := unix.Open(i2cDevPath, unix.O_RDWR, 0)
+		// Probe: try to read version register using I2C_RDWR (SMBus read_byte_data).
+		// Generates the REPEATED START the STM32 firmware requires.
+		_, err := d.readByteData(fd, addr, RegVersionMaj)
 		if err != nil {
-			continue
+			slog.Debug("i2c: no response at address", "addr", fmt.Sprintf("0x%02x", addr), "err", err)
+			break // addresses are sequential — first gap means no more units
 		}
-		// Set I2C slave address
-		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), i2cSlave, uintptr(addr)); errno != 0 {
-			unix.Close(fd)
-			continue
-		}
-		// Probe: try to read version register
-		probe := make([]byte, 1)
-		if err := d.rawWrite(fd, []byte{RegVersionMaj}); err != nil {
-			unix.Close(fd)
-			continue
-		}
-		if _, err := unix.Read(fd, probe); err != nil {
-			unix.Close(fd)
-			continue
-		}
-		d.fds[unit] = fd
+		slog.Info("i2c: preamp detected", "unit", unit, "addr", fmt.Sprintf("0x%02x", addr))
 		detected = append(detected, unit)
 	}
 
 	if len(detected) == 0 {
+		unix.Close(fd)
+		d.fd = -1
 		return fmt.Errorf("i2c: no AmpliPi preamp units detected on %s", i2cDevPath)
 	}
 	d.units = detected
 
-	// Enforce digital-only mode on expander units (they have no analog hardware).
-	// Unit 0 is always the main unit; units 1+ are expanders.
+	// Enforce digital-only on expander units (they have no analog inputs).
 	for _, unit := range detected {
 		if unit > 0 {
-			fd, ok := d.fds[unit]
-			if ok {
-				// Write REG_SRC_AD = 0x00 (all digital) to expander unit
-				_ = d.rawWrite(fd, []byte{RegSrcAD, 0x0F}) // 0x0F = all 4 sources digital
-			}
+			addr := devAddrs[unit]
+			_ = d.writeByteData(fd, addr, RegSrcAD, 0x0F) // all 4 sources digital
 		}
 	}
 
@@ -93,11 +119,14 @@ func (d *I2CDriver) Write(ctx context.Context, unit int, reg Register, val byte)
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	fd, err := d.getFD(unit)
-	if err != nil {
-		return err
+	if d.fd < 0 {
+		return fmt.Errorf("i2c: driver not initialized")
 	}
-	return d.rawWrite(fd, []byte{reg, val})
+	if unit < 0 || unit >= len(devAddrs) {
+		return fmt.Errorf("i2c: invalid unit %d", unit)
+	}
+	addr := devAddrs[unit]
+	return d.writeByteData(d.fd, addr, reg, val)
 }
 
 func (d *I2CDriver) Read(ctx context.Context, unit int, reg Register) (byte, error) {
@@ -106,20 +135,33 @@ func (d *I2CDriver) Read(ctx context.Context, unit int, reg Register) (byte, err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	fd, err := d.getFD(unit)
-	if err != nil {
-		return 0, err
+	if d.fd < 0 {
+		return 0, fmt.Errorf("i2c: driver not initialized")
 	}
-	// Write register address
-	if err := d.rawWrite(fd, []byte{reg}); err != nil {
-		return 0, fmt.Errorf("i2c: write reg addr: %w", err)
+	if unit < 0 || unit >= len(devAddrs) {
+		return 0, fmt.Errorf("i2c: invalid unit %d", unit)
 	}
-	// Read response byte
-	buf := make([]byte, 1)
-	if _, err := unix.Read(fd, buf); err != nil {
-		return 0, fmt.Errorf("i2c: read: %w", err)
+	addr := devAddrs[unit]
+	return d.readByteData(d.fd, addr, reg)
+}
+
+// readByteData performs a combined write+read with REPEATED START (SMBus read_byte_data).
+// This matches what the STM32 firmware expects: START→addr|W→reg→RS→addr|R→data→NACK→STOP
+func (d *I2CDriver) readByteData(fd int, addr uint16, reg Register) (byte, error) {
+	wbuf := [1]byte{reg}
+	rbuf := [1]byte{}
+
+	// Two i2c_msg: [write reg addr] + [read 1 byte], combined with I2C_RDWR ioctl
+	msgs := [2]i2cMsg{
+		{addr: addr, flags: 0, length: 1, buf: uintptr(unsafe.Pointer(&wbuf[0]))},
+		{addr: addr, flags: i2cMsgRD, length: 1, buf: uintptr(unsafe.Pointer(&rbuf[0]))},
 	}
-	return buf[0], nil
+	rdwr := i2cRdwr{msgs: uintptr(unsafe.Pointer(&msgs[0])), nmsgs: 2}
+
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), i2cRdwrIOCTL, uintptr(unsafe.Pointer(&rdwr))); errno != 0 {
+		return 0, fmt.Errorf("i2c: I2C_RDWR read: %w", errno)
+	}
+	return rbuf[0], nil
 }
 
 func (d *I2CDriver) SetSourceTypes(ctx context.Context, unit int, analog [4]bool) error {
@@ -285,32 +327,53 @@ func (d *I2CDriver) Units() []int {
 
 func (d *I2CDriver) IsReal() bool { return true }
 
-// Close closes all open file descriptors.
+// Close releases the I2C file descriptor.
 func (d *I2CDriver) Close() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for _, fd := range d.fds {
-		unix.Close(fd)
+	if d.fd >= 0 {
+		unix.Close(d.fd)
+		d.fd = -1
 	}
-	d.fds = make(map[int]int)
 }
 
-func (d *I2CDriver) getFD(unit int) (int, error) {
-	fd, ok := d.fds[unit]
-	if !ok {
-		return 0, fmt.Errorf("i2c: unit %d not initialized", unit)
+// writeByteData performs a combined write of [reg, val] using I2C_RDWR.
+// This is equivalent to smbus2.write_byte_data(addr, reg, val).
+func (d *I2CDriver) writeByteData(fd int, addr uint16, reg Register, val byte) error {
+	wbuf := [2]byte{reg, val}
+	msgs := [1]i2cMsg{
+		{addr: addr, flags: 0, length: 2, buf: uintptr(unsafe.Pointer(&wbuf[0]))},
 	}
-	return fd, nil
+	rdwr := i2cRdwr{msgs: uintptr(unsafe.Pointer(&msgs[0])), nmsgs: 1}
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), i2cRdwrIOCTL, uintptr(unsafe.Pointer(&rdwr))); errno != 0 {
+		return fmt.Errorf("i2c: I2C_RDWR write 0x%02x reg=0x%02x: %w", addr, reg, errno)
+	}
+	return nil
 }
 
-func (d *I2CDriver) rawWrite(fd int, data []byte) error {
-	written := 0
-	for written < len(data) {
-		n, err := unix.Write(fd, data[written:])
-		if err != nil {
-			return fmt.Errorf("i2c: write: %w", err)
-		}
-		written += n
+const uartDev = "/dev/serial0"
+
+// assignAddress sends the I2C address assignment to the main preamp via UART.
+// The STM32 firmware starts with i2c_addr=0 (slave not initialised) and blocks
+// until it receives this three-byte sequence.
+func (d *I2CDriver) assignAddress() error {
+	port, err := serial.Open(uartDev, &serial.Mode{
+		BaudRate: 9600,
+		DataBits: 8,
+		Parity:   serial.NoParity,
+		StopBits: serial.OneStopBit,
+	})
+	if err != nil {
+		return fmt.Errorf("open %s: %w", uartDev, err)
 	}
+	defer port.Close()
+
+	// {0x41='A', 0x10=address, 0x0A='\n'}
+	// The STM32 parses this as: header + i2c_addr + newline.
+	_, err = port.Write([]byte{0x41, 0x10, 0x0A})
+	if err != nil {
+		return fmt.Errorf("write UART: %w", err)
+	}
+	slog.Debug("i2c: sent address assignment via UART", "addr", "0x10", "device", uartDev)
 	return nil
 }
