@@ -1,0 +1,132 @@
+// Command amplipi is the AmpliPi multi-zone audio system daemon.
+// Run with --mock to use simulated hardware (no I2C device required).
+package main
+
+import (
+	"context"
+	"flag"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/micro-nova/amplipi-go/internal/api"
+	"github.com/micro-nova/amplipi-go/internal/auth"
+	"github.com/micro-nova/amplipi-go/internal/config"
+	"github.com/micro-nova/amplipi-go/internal/controller"
+	"github.com/micro-nova/amplipi-go/internal/events"
+	"github.com/micro-nova/amplipi-go/internal/hardware"
+)
+
+func main() {
+	var (
+		mock   = flag.Bool("mock", false, "use mock hardware driver (no I2C device required)")
+		addr   = flag.String("addr", ":80", "HTTP listen address")
+		cfgDir = flag.String("config-dir", "", "config directory (default: ~/.config/amplipi)")
+		debug  = flag.Bool("debug", false, "enable debug logging")
+	)
+	flag.Parse()
+
+	// Configure logging
+	logLevel := slog.LevelInfo
+	if *debug {
+		logLevel = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+
+	// Resolve config directory
+	if *cfgDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			slog.Error("cannot determine home directory", "err", err)
+			os.Exit(1)
+		}
+		*cfgDir = filepath.Join(home, ".config", "amplipi")
+	}
+	if err := os.MkdirAll(*cfgDir, 0755); err != nil {
+		slog.Error("cannot create config directory", "path", *cfgDir, "err", err)
+		os.Exit(1)
+	}
+
+	// Graceful shutdown context
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	// Hardware driver
+	var hw hardware.Driver
+	if *mock {
+		slog.Info("using mock hardware driver")
+		hw = hardware.NewMock()
+	} else {
+		slog.Info("using real I2C hardware driver")
+		hw = hardware.NewI2C()
+	}
+	if err := hw.Init(ctx); err != nil {
+		if !*mock {
+			slog.Error("hardware initialization failed", "err", err)
+			os.Exit(1)
+		}
+	}
+
+	// Config store
+	store := config.NewJSONStore(*cfgDir)
+
+	// Event bus
+	bus := events.NewBus()
+
+	// Controller
+	ctrl, err := controller.New(hw, store, bus)
+	if err != nil {
+		slog.Error("controller initialization failed", "err", err)
+		os.Exit(1)
+	}
+
+	// Auth service
+	authSvc, err := auth.NewService(*cfgDir)
+	if err != nil {
+		slog.Error("auth service initialization failed", "err", err)
+		os.Exit(1)
+	}
+	defer authSvc.Close()
+
+	// Background goroutines
+	go hardware.RunPiTempSender(ctx, hw)
+
+	// HTTP server
+	router := api.NewRouter(ctrl, authSvc, bus)
+	srv := &http.Server{
+		Addr:         *addr,
+		Handler:      router,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 0, // 0 = no timeout (needed for SSE)
+		IdleTimeout:  120 * time.Second,
+	}
+
+	go func() {
+		slog.Info("AmpliPi listening", "addr", *addr, "mock", *mock, "config", *cfgDir)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("server error", "err", err)
+		}
+	}()
+
+	// Wait for shutdown signal
+	<-ctx.Done()
+	slog.Info("shutting down...")
+
+	// Flush pending config writes
+	if err := store.Flush(); err != nil {
+		slog.Warn("failed to flush config", "err", err)
+	}
+
+	// Graceful HTTP shutdown
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutCancel()
+	if err := srv.Shutdown(shutCtx); err != nil {
+		slog.Warn("server shutdown error", "err", err)
+	}
+
+	slog.Info("shutdown complete")
+}
