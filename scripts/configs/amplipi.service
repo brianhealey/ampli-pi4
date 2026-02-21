@@ -1,0 +1,18 @@
+[Unit]
+Description=AmpliPi Audio Controller
+After=network.target sound.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi
+ExecStart=/usr/local/bin/amplipi --addr :80
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=amplipi
+
+[Install]
+WantedBy=multi-user.target

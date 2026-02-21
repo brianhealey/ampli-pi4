@@ -1,0 +1,17 @@
+[Unit]
+Description=AmpliPi OTA Updater
+After=network.target amplipi.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi
+ExecStart=/usr/local/bin/amplipi-update --addr :5001
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=amplipi-update
+
+[Install]
+WantedBy=multi-user.target

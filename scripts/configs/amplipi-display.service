@@ -1,0 +1,25 @@
+# REFERENCE ONLY — this file is not installed directly.
+# scripts/lib/70-amplipi.sh generates /etc/systemd/system/amplipi-display.service
+# at setup time with the correct --test-board flag based on detected Pi hardware.
+# Re-run scripts/setup.sh to regenerate after hardware changes.
+
+[Unit]
+Description=AmpliPi Display Driver
+After=network.target amplipi.service
+BindsTo=amplipi.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi
+# --test-board: use SPI0 + standard 40-pin GPIO (Pi 4 / Pi 3)
+# Remove --test-board if running on original CM3+ carrier board
+ExecStart=/usr/local/bin/amplipi-display --test-board --addr :unix
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=amplipi-display
+
+[Install]
+WantedBy=multi-user.target

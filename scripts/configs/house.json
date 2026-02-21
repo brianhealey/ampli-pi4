@@ -1,0 +1,24 @@
+{
+  "sources": [
+    {"id": 0, "name": "Source 1", "input": "stream=0"},
+    {"id": 1, "name": "Source 2", "input": "stream=1"},
+    {"id": 2, "name": "Source 3", "input": "stream=2"},
+    {"id": 3, "name": "Source 4", "input": "stream=3"}
+  ],
+  "zones": [
+    {"id": 0, "name": "Zone 1", "source_id": 0, "mute": true, "vol": -30, "vol_delta": 0, "vol_min": -79, "vol_max": 0, "disabled": false},
+    {"id": 1, "name": "Zone 2", "source_id": 0, "mute": true, "vol": -30, "vol_delta": 0, "vol_min": -79, "vol_max": 0, "disabled": false},
+    {"id": 2, "name": "Zone 3", "source_id": 0, "mute": true, "vol": -30, "vol_delta": 0, "vol_min": -79, "vol_max": 0, "disabled": false},
+    {"id": 3, "name": "Zone 4", "source_id": 0, "mute": true, "vol": -30, "vol_delta": 0, "vol_min": -79, "vol_max": 0, "disabled": false},
+    {"id": 4, "name": "Zone 5", "source_id": 0, "mute": true, "vol": -30, "vol_delta": 0, "vol_min": -79, "vol_max": 0, "disabled": false},
+    {"id": 5, "name": "Zone 6", "source_id": 0, "mute": true, "vol": -30, "vol_delta": 0, "vol_min": -79, "vol_max": 0, "disabled": false}
+  ],
+  "groups": [],
+  "streams": [
+    {"id": 0, "name": "Spotify",  "type": "spotify",  "disabled": false},
+    {"id": 1, "name": "AirPlay",  "type": "airplay",  "disabled": false},
+    {"id": 2, "name": "LMS",      "type": "lms",       "disabled": false},
+    {"id": 3, "name": "Pandora",  "type": "pandora",   "disabled": false}
+  ],
+  "presets": []
+}

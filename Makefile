@@ -9,13 +9,14 @@ build:
 	@mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/amplipi ./cmd/amplipi/...
 
-# ── Cross-compile for AmpliPi (Raspberry Pi CM3+, armv7l) ────────────────────
+# ── Build for AmpliPi (Raspberry Pi 4, 64-bit Raspberry Pi OS / Debian trixie) ─
+# Both host (Turing RK1) and target (Pi 4) are arm64 — no true cross-compilation needed.
 build-pi:
 	@mkdir -p $(BIN_DIR)
-	GOOS=linux GOARCH=arm GOARM=7 go build \
+	GOOS=linux GOARCH=arm64 go build \
 		-ldflags="-s -w" \
-		-o $(BIN_DIR)/amplipi-arm ./cmd/amplipi/...
-	@echo "Built: $(BIN_DIR)/amplipi-arm (linux/arm)"
+		-o $(BIN_DIR)/amplipi-arm64 ./cmd/amplipi/...
+	@echo "Built: $(BIN_DIR)/amplipi-arm64 (linux/arm64)"
 
 # ── Tests (local, race detector) ─────────────────────────────────────────────
 test:
@@ -43,7 +44,7 @@ run: build
 # ── Deploy to AmpliPi ─────────────────────────────────────────────────────────
 # Copies the arm binary to the Pi and optionally restarts it.
 deploy: build-pi
-	scp $(BIN_DIR)/amplipi-arm $(PI_HOST):$(PI_BIN)/amplipi
+	scp $(BIN_DIR)/amplipi-arm64 $(PI_HOST):$(PI_BIN)/amplipi
 	@echo "Deployed to $(PI_HOST):$(PI_BIN)/amplipi"
 
 # Deploy and run in mock mode (safe — no I2C required)
@@ -77,3 +78,16 @@ tidy:
 # ── Clean ─────────────────────────────────────────────────────────────────────
 clean:
 	rm -rf $(BIN_DIR)
+
+# ── Pi Setup (run on the Pi via SSH, or directly on device) ──────────────────
+.PHONY: setup-pi scripts-sync
+
+# Run the full device setup on the Pi (interactive, requires sudo on the Pi)
+setup-pi:
+	ssh -t $(PI_HOST) 'cd $(PI_BIN) && sudo scripts/setup.sh'
+
+# Sync scripts/ to Pi without running them
+# Useful for iterating on scripts before committing
+scripts-sync:
+	rsync -av --mkpath scripts/ $(PI_HOST):$(PI_BIN)/scripts/
+	ssh $(PI_HOST) 'chmod +x $(PI_BIN)/scripts/setup.sh $(PI_BIN)/scripts/lib/*.sh'
