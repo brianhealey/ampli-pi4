@@ -45,6 +45,24 @@
 			selectedZones = [...selectedZones, zoneId];
 		}
 	}
+
+	async function updateZone(zoneId: number, update: { vol?: number; mute?: boolean }) {
+		try {
+			await api.updateZone(zoneId, update);
+		} catch (err) {
+			console.error('Failed to update zone:', err);
+		}
+	}
+
+	function dbToPercent(db: number, min: number = -79, max: number = 0): number {
+		if (db <= min) return 0;
+		if (db >= max) return 100;
+		return Math.round(((db - min) / (max - min)) * 100);
+	}
+
+	function percentToDb(percent: number, min: number = -79, max: number = 0): number {
+		return Math.round(min + (percent / 100) * (max - min));
+	}
 </script>
 
 <div class="p-4 md:p-6">
@@ -127,12 +145,46 @@
 					</div>
 				{/if}
 
-				<!-- Zones list -->
-				<div class="space-y-1">
-					<p class="text-xs font-medium text-gray-700 dark:text-gray-300">Zones:</p>
+				<!-- Individual zone controls -->
+				<div class="space-y-3">
+					<p class="text-xs font-medium text-gray-700 dark:text-gray-300">Individual Zones:</p>
 					{#each groupZones as zone (zone.id)}
-						<div class="rounded bg-gray-50 px-2 py-1 text-sm dark:bg-gray-700/50">
-							{zone.name}
+						<div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-600 dark:bg-gray-700/50">
+							<!-- Zone header -->
+							<div class="mb-2 flex items-center justify-between">
+								<span class="text-sm font-medium text-gray-900 dark:text-white">{zone.name}</span>
+								<button
+									onclick={() => updateZone(zone.id, { mute: !zone.mute })}
+									class="rounded p-1 hover:bg-gray-200 dark:hover:bg-gray-600"
+									class:text-gray-400={zone.mute}
+									class:text-blue-600={!zone.mute}
+									class:dark:text-blue-400={!zone.mute}
+								>
+									{zone.mute ? '🔇' : '🔊'}
+								</button>
+							</div>
+
+							<!-- Zone volume control -->
+							<div class="space-y-1">
+								<div class="flex items-center justify-between">
+									<span class="text-xs text-gray-600 dark:text-gray-400">Volume</span>
+									<span class="text-xs text-gray-600 dark:text-gray-400">
+										{dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}%
+									</span>
+								</div>
+								<input
+									type="range"
+									min="0"
+									max="100"
+									value={dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}
+									oninput={(e) => {
+										const percent = parseInt(e.currentTarget.value);
+										const db = percentToDb(percent, zone.vol_min, zone.vol_max);
+										updateZone(zone.id, { vol: db });
+									}}
+									class="w-full accent-blue-600"
+								/>
+							</div>
 						</div>
 					{/each}
 				</div>
