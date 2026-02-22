@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { amplipi } from '$lib/store.svelte';
 	import { api } from '$lib/api';
-	import type { Source, Zone } from '$lib/types';
+	import type { Source, Zone, Group } from '$lib/types';
+	import { filterZonesByGroup, getSourceGroups, getGroupZones } from '$lib/grouping';
+
+	let expandedGroups = $state<Set<number>>(new Set());
 
 	async function updateZone(zoneId: number, update: { mute?: boolean; vol?: number }) {
 		try {
@@ -11,6 +14,22 @@
 		}
 	}
 
+	async function updateGroup(groupId: number, update: { mute?: boolean; vol_f?: number }) {
+		try {
+			await api.updateGroup(groupId, update);
+		} catch (err) {
+			console.error('Failed to update group:', err);
+		}
+	}
+
+	function volFToPercent(vol_f: number): number {
+		return Math.round(vol_f * 100);
+	}
+
+	function percentToVolF(percent: number): number {
+		return percent / 100;
+	}
+
 	async function assignStreamToSource(sourceId: number, streamId: number) {
 		try {
 			const input = streamId >= 0 ? `stream=${streamId}` : '';
@@ -18,6 +37,15 @@
 		} catch (err) {
 			console.error('Failed to assign stream:', err);
 		}
+	}
+
+	function toggleGroupExpanded(groupId: number) {
+		if (expandedGroups.has(groupId)) {
+			expandedGroups.delete(groupId);
+		} else {
+			expandedGroups.add(groupId);
+		}
+		expandedGroups = expandedGroups;
 	}
 
 	function getSourceStream(source: Source) {
@@ -33,6 +61,13 @@
 
 	function getSourceZones(source: Source) {
 		return amplipi.zones.filter((z) => z.source_id === source.id && !z.disabled);
+	}
+
+	function getSourceZonesAndGroups(source: Source) {
+		const zones = getSourceZones(source);
+		const groups = getSourceGroups(source.id, amplipi.zones, amplipi.groups);
+		const { grouped, standalone } = filterZonesByGroup(zones, groups);
+		return { groups, grouped, standalone };
 	}
 
 	function dbToPercent(db: number, min: number = -79, max: number = 0): number {
@@ -52,8 +87,9 @@
 
 	<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
 		{#each amplipi.sources as source (source.id)}
-			{@const zones = getSourceZones(source)}
+			{@const { groups, grouped, standalone } = getSourceZonesAndGroups(source)}
 			{@const stream = getSourceStream(source)}
+			{@const totalZoneCount = standalone.length + Array.from(grouped.values()).reduce((sum, zones) => sum + zones.length, 0)}
 
 			<div
 				class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800"
@@ -77,7 +113,7 @@
 							{/if}
 						</div>
 						<span class="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/20 dark:text-blue-400">
-							{zones.length} zone{zones.length !== 1 ? 's' : ''}
+							{totalZoneCount} zone{totalZoneCount !== 1 ? 's' : ''}
 						</span>
 					</div>
 
@@ -96,10 +132,104 @@
 					</div>
 				</div>
 
-				<!-- Zones list -->
-				{#if zones.length > 0}
+				<!-- Groups and zones list -->
+				{#if groups.length > 0 || standalone.length > 0}
 					<div class="space-y-3">
-						{#each zones as zone (zone.id)}
+						<!-- Groups first -->
+						{#each groups as group (group.id)}
+							{@const groupZones = grouped.get(group.id) || []}
+							{@const isExpanded = expandedGroups.has(group.id)}
+							{#if groupZones.length > 0}
+								<div class="rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20">
+									<!-- Group header -->
+									<div class="mb-2 flex items-center justify-between">
+										<button
+											onclick={() => toggleGroupExpanded(group.id)}
+											class="flex items-center gap-2 text-left"
+										>
+											<span class="text-sm font-medium text-purple-900 dark:text-purple-300">
+												{isExpanded ? '▼' : '▶'} {group.name}
+											</span>
+											<span class="text-xs text-purple-700 dark:text-purple-400">
+												({groupZones.length} zone{groupZones.length !== 1 ? 's' : ''})
+											</span>
+										</button>
+										<button
+											onclick={() => updateGroup(group.id, { mute: !group.mute })}
+											class="rounded p-1 hover:bg-purple-100 dark:hover:bg-purple-800"
+											class:text-gray-400={group.mute}
+											class:text-purple-600={!group.mute}
+											class:dark:text-purple-400={!group.mute}
+										>
+											{group.mute ? '🔇' : '🔊'}
+										</button>
+									</div>
+
+									<!-- Group volume slider -->
+									<div class="mb-3 flex items-center gap-2">
+										<span class="text-xs text-purple-700 dark:text-purple-400">
+											{volFToPercent(group.vol_f ?? 0)}%
+										</span>
+										<input
+											type="range"
+											min="0"
+											max="100"
+											value={volFToPercent(group.vol_f ?? 0)}
+											oninput={(e) => {
+												const percent = parseInt(e.currentTarget.value);
+												const vol_f = percentToVolF(percent);
+												updateGroup(group.id, { vol_f, mute: false });
+											}}
+											class="flex-1 accent-purple-600"
+										/>
+									</div>
+
+									<!-- Expanded group zones -->
+									{#if isExpanded}
+										<div class="space-y-2 border-t border-purple-200 p-3 pt-2 dark:border-purple-800">
+											{#each groupZones as zone (zone.id)}
+												<div class="rounded bg-white p-2 dark:bg-gray-800">
+													<div class="mb-1 flex items-center justify-between">
+														<span class="text-xs font-medium text-gray-700 dark:text-gray-300">
+															{zone.name}
+														</span>
+														<button
+															onclick={() => updateZone(zone.id, { mute: !zone.mute })}
+															class="rounded p-0.5 text-xs hover:bg-gray-100 dark:hover:bg-gray-700"
+															class:text-gray-400={zone.mute}
+															class:text-blue-600={!zone.mute}
+															class:dark:text-blue-400={!zone.mute}
+														>
+															{zone.mute ? '🔇' : '🔊'}
+														</button>
+													</div>
+													<div class="flex items-center gap-1">
+														<span class="text-xs text-gray-500 dark:text-gray-400">
+															{dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}%
+														</span>
+														<input
+															type="range"
+															min="0"
+															max="100"
+															value={dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}
+															oninput={(e) => {
+																const percent = parseInt(e.currentTarget.value);
+																const db = percentToDb(percent, zone.vol_min, zone.vol_max);
+																updateZone(zone.id, { vol: db });
+															}}
+															class="flex-1 accent-blue-600"
+														/>
+													</div>
+												</div>
+											{/each}
+										</div>
+									{/if}
+								</div>
+							{/if}
+						{/each}
+
+						<!-- Standalone zones (not in any group) -->
+						{#each standalone as zone (zone.id)}
 							<div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-700/50">
 								<div class="mb-2 flex items-center justify-between">
 									<span class="text-sm font-medium text-gray-900 dark:text-white">{zone.name}</span>
