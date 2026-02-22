@@ -4,7 +4,7 @@
 # ============================================================================
 # Build Stage
 # ============================================================================
-FROM golang:1.26-alpine AS builder
+FROM golang:1.21-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache \
@@ -52,14 +52,11 @@ RUN addgroup -g 1000 amplipi && \
     adduser -D -u 1000 -G amplipi amplipi
 
 # Create application directories
-RUN mkdir -p /config /logs /web && \
-    chown -R amplipi:amplipi /config /logs /web
+RUN mkdir -p /config /logs && \
+    chown -R amplipi:amplipi /config /logs
 
-# Copy binary from builder
+# Copy binary from builder (includes embedded web assets)
 COPY --from=builder /build/amplipi /usr/local/bin/amplipi
-
-# Copy web assets (if they exist)
-COPY --from=builder /build/web/dist /web
 
 # Set working directory
 WORKDIR /app
