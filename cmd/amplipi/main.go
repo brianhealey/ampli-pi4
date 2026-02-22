@@ -34,6 +34,33 @@ import (
 //go:embed all:static
 var webFiles embed.FS
 
+// spaHandler serves static files with SPA fallback:
+// if a file exists, serve it; otherwise serve index.html for client-side routing.
+func spaHandler(fsys fs.FS) http.Handler {
+	fileServer := http.FileServer(http.FS(fsys))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// Try to open the file
+		f, err := fsys.Open(strings.TrimPrefix(path, "/"))
+		if err == nil {
+			// File exists, check if it's a directory
+			stat, err := f.Stat()
+			f.Close()
+			if err == nil && !stat.IsDir() {
+				// File exists and is not a directory - serve it
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		// File doesn't exist or is a directory - serve index.html for SPA routing
+		r.URL.Path = "/"
+		fileServer.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	var (
 		mock   = flag.Bool("mock", false, "use mock hardware driver (no I2C device required)")
@@ -175,13 +202,13 @@ func main() {
 	// HTTP server
 	router := api.NewRouter(ctrl, authSvc, bus)
 
-	// Add web UI static file handler
+	// Add web UI static file handler with SPA fallback
 	webFS, err := fs.Sub(webFiles, "static")
 	if err != nil {
 		slog.Error("failed to load web files", "err", err)
 		os.Exit(1)
 	}
-	router.(*chi.Mux).Handle("/*", http.FileServer(http.FS(webFS)))
+	router.(*chi.Mux).Handle("/*", spaHandler(webFS))
 
 	srv := &http.Server{
 		Addr:         *addr,
