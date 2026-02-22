@@ -101,16 +101,29 @@ func migrateState(state *models.State) {
 // ensureDefaultStreams adds missing default RCA and Aux streams to the state.
 // These streams represent physical hardware inputs and should always be present.
 func ensureDefaultStreams(state *models.State) {
-	// Check which default streams are missing
+	// Check which default streams are missing and ensure existing RCA streams have index field
 	hasAux := false
 	rcaPresent := make(map[int]bool)
 
-	for _, s := range state.Streams {
+	for i := range state.Streams {
+		s := &state.Streams[i]
 		if s.ID == models.AuxStreamID && s.Type == models.StreamTypeAux {
 			hasAux = true
 		}
 		if s.Type == models.StreamTypeRCA {
 			rcaPresent[s.ID] = true
+			// Ensure RCA streams have index field in Config (migration for existing configs)
+			if s.Config == nil {
+				s.Config = make(map[string]interface{})
+			}
+			if _, hasIndex := s.Config["index"]; !hasIndex {
+				// Calculate index from stream ID (996=0, 997=1, 998=2, 999=3)
+				index := s.ID - models.RCAStreamBaseID
+				if index >= 0 && index <= 3 {
+					s.Config["index"] = index
+					slog.Info("config: adding missing index to RCA stream", "id", s.ID, "index", index)
+				}
+			}
 		}
 	}
 
@@ -140,6 +153,7 @@ func ensureDefaultStreams(state *models.State) {
 				Type:      models.StreamTypeRCA,
 				Disabled:  &f,
 				Browsable: &f,
+				Config:    map[string]interface{}{"index": i},
 			})
 		}
 	}

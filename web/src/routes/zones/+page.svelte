@@ -20,6 +20,43 @@
 		}
 	}
 
+	async function handleGroupInputChange(groupId: number, inputValue: string) {
+		if (inputValue === 'none') {
+			// Disconnect from source
+			await api.updateGroup(groupId, { source_id: -1 });
+			return;
+		}
+
+		// Parse stream=<id> format
+		if (inputValue.startsWith('stream=')) {
+			const streamId = parseInt(inputValue.substring(7));
+			const stream = amplipi.getStream(streamId);
+
+			if (!stream) {
+				console.error('Stream not found:', streamId);
+				return;
+			}
+
+			// For RCA streams, the source_id must match the stream's index
+			if (stream.type === 'rca' && stream.config?.index !== undefined) {
+				const sourceId = stream.config.index as number;
+				// First update the source's input
+				await api.updateSource(sourceId, { input: inputValue });
+				// Then assign the group to that source
+				await api.updateGroup(groupId, { source_id: sourceId });
+			} else {
+				// For non-RCA streams, assign to source 0 by default
+				await api.updateSource(0, { input: inputValue });
+				await api.updateGroup(groupId, { source_id: 0 });
+			}
+		}
+	}
+
+	function availableStreamsForGroup(group: typeof amplipi.groups[0]): typeof amplipi.streams {
+		// Return all streams that are not disabled
+		return amplipi.streams.filter((stream) => !stream.disabled);
+	}
+
 	async function updateGroup(groupId: number, update: { mute?: boolean; vol_delta?: number }) {
 		const start = performance.now();
 		console.log(`[API] updateGroup(${groupId}, ${JSON.stringify(update)}) - START`);
@@ -42,12 +79,14 @@
 	}
 
 	function toggleGroupExpanded(groupId: number) {
-		if (expandedGroups.has(groupId)) {
-			expandedGroups.delete(groupId);
+		// Create a new Set to ensure reactivity triggers
+		const newExpanded = new Set(expandedGroups);
+		if (newExpanded.has(groupId)) {
+			newExpanded.delete(groupId);
 		} else {
-			expandedGroups.add(groupId);
+			newExpanded.add(groupId);
 		}
-		expandedGroups = expandedGroups;
+		expandedGroups = newExpanded;
 	}
 
 	function dbToPercent(db: number, min: number = -79, max: number = 0): number {
@@ -56,6 +95,49 @@
 
 	function percentToDb(percent: number, min: number = -79, max: number = 0): number {
 		return Math.round(min + (percent / 100) * (max - min));
+	}
+
+	function availableStreamsForZone(_zone: Zone): typeof amplipi.streams {
+		// Return all streams that are not disabled
+		return amplipi.streams.filter((stream) => !stream.disabled);
+	}
+
+	async function handleSourceInputChange(zoneId: number, inputValue: string) {
+		if (inputValue === 'none') {
+			// Disconnect from source
+			await updateZone(zoneId, { source_id: -1 });
+			return;
+		}
+
+		// Parse stream=<id> format
+		if (inputValue.startsWith('stream=')) {
+			const streamId = parseInt(inputValue.substring(7));
+			const stream = amplipi.getStream(streamId);
+
+			if (!stream) {
+				console.error('Stream not found:', streamId);
+				return;
+			}
+
+			// For RCA streams, the source_id must match the stream's index
+			if (stream.type === 'rca' && stream.config?.index !== undefined) {
+				const sourceId = stream.config.index as number;
+				// First update the source's input
+				await api.updateSource(sourceId, { input: inputValue });
+				// Then connect the zone to that source
+				await updateZone(zoneId, { source_id: sourceId, mute: false });
+			} else {
+				// For non-RCA streams, we need to assign the stream to a source first
+				// Find the zone's current source or use source 0
+				const zone = amplipi.zones.find((z) => z.id === zoneId);
+				const sourceId = zone && zone.source_id >= 0 ? zone.source_id : 0;
+
+				// Update the source's input
+				await api.updateSource(sourceId, { input: inputValue });
+				// Connect zone to source
+				await updateZone(zoneId, { source_id: sourceId, mute: false });
+			}
+		}
 	}
 </script>
 
@@ -144,24 +226,51 @@
 						</div>
 					</div>
 
-					<!-- Expanded group zones -->
+					<!-- Group input selector -->
+					<div class="mt-3">
+						<label class="mb-1 block text-sm font-medium text-purple-700 dark:text-purple-300">
+							Group Input
+						</label>
+						<select
+							value={group.source_id !== undefined && group.source_id >= 0 ? amplipi.getSource(group.source_id)?.input || '' : 'none'}
+							onchange={(e) => handleGroupInputChange(group.id, e.currentTarget.value)}
+							class="w-full rounded border border-purple-300 bg-white px-2 py-1 text-sm focus:border-purple-500 focus:ring-2 focus:ring-purple-500 dark:border-purple-700 dark:bg-purple-900/30 dark:text-white"
+						>
+							<option value="none">No input</option>
+							{#each availableStreamsForGroup(group) as stream (stream.id)}
+								<option value="stream={stream.id}">
+									{stream.name}
+									{#if stream.type === 'rca' && stream.config?.index !== undefined}
+										(RCA Input {stream.config.index + 1})
+									{/if}
+								</option>
+							{/each}
+						</select>
+						{#if group.source_id !== undefined && group.source_id >= 0}
+							{@const groupSource = amplipi.getSource(group.source_id)}
+							{#if groupSource}
+								<p class="mt-1 text-xs text-purple-600 dark:text-purple-400">
+									All zones in this group play: {groupSource.name}
+								</p>
+							{/if}
+						{/if}
+					</div>
+
+				<!-- Expanded group zones -->
 					{#if isExpanded}
 						<div class="space-y-3 border-t border-purple-200 pt-4 dark:border-purple-800">
 							<h4 class="text-xs font-semibold uppercase text-purple-700 dark:text-purple-400">
 								Member Zones
 							</h4>
 							{#each groupZones as zone (zone.id)}
-								{@const source = amplipi.getSource(zone.source_id)}
 								<div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
 									<!-- Zone header -->
 									<div class="mb-3 flex items-start justify-between">
 										<div class="flex-1">
 											<h4 class="text-sm font-semibold text-gray-900 dark:text-white">{zone.name}</h4>
-											{#if source}
-												<p class="text-xs text-gray-600 dark:text-gray-400">{source.name}</p>
-											{:else}
-												<p class="text-xs text-gray-500 dark:text-gray-500">No source</p>
-											{/if}
+											<p class="text-xs text-purple-600 dark:text-purple-400">
+												Source controlled by group
+											</p>
 										</div>
 
 										<button
@@ -196,23 +305,6 @@
 											}}
 											class="w-full accent-blue-600"
 										/>
-									</div>
-
-									<!-- Source selector -->
-									<div class="mt-2">
-										<label class="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">
-											Source
-										</label>
-										<select
-											value={zone.source_id}
-											onchange={(e) => updateZone(zone.id, { source_id: parseInt(e.currentTarget.value) })}
-											class="w-full rounded border border-gray-300 bg-white px-2 py-1 text-xs focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-										>
-											<option value={-1}>None</option>
-											{#each amplipi.sources as src (src.id)}
-												<option value={src.id}>{src.name}</option>
-											{/each}
-										</select>
 									</div>
 								</div>
 							{/each}
@@ -279,19 +371,24 @@
 					</div>
 				</div>
 
-				<!-- Source selector -->
+				<!-- Stream selector -->
 				<div class="mt-4">
 					<label class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-						Source
+						Input
 					</label>
 					<select
-						value={zone.source_id}
-						onchange={(e) => updateZone(zone.id, { source_id: parseInt(e.currentTarget.value) })}
+						value={zone.source_id >= 0 ? amplipi.getSource(zone.source_id)?.input || '' : 'none'}
+						onchange={(e) => handleSourceInputChange(zone.id, e.currentTarget.value)}
 						class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
 					>
-						<option value={-1}>None</option>
-						{#each amplipi.sources as src (src.id)}
-							<option value={src.id}>{src.name}</option>
+						<option value="none">None</option>
+						{#each availableStreamsForZone(zone) as stream (stream.id)}
+							<option value="stream={stream.id}">
+								{stream.name}
+								{#if stream.type === 'rca' && stream.config?.index !== undefined}
+									(RCA Input {stream.config.index + 1})
+								{/if}
+							</option>
 						{/each}
 					</select>
 				</div>

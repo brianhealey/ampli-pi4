@@ -8,6 +8,9 @@
 	let newStreamType = $state('spotify');
 	let newStreamConfig = $state<Record<string, string>>({});
 
+	let editingStream = $state<Stream | null>(null);
+	let editStreamName = $state('');
+
 	const streamTypes = [
 		{ value: 'spotify', label: 'Spotify Connect', icon: '🎵' },
 		{ value: 'airplay', label: 'AirPlay', icon: '📡' },
@@ -60,6 +63,24 @@
 			await api.deleteStream(streamId);
 		} catch (err) {
 			console.error('Failed to delete stream:', err);
+		}
+	}
+
+	function startEditStream(stream: Stream) {
+		editingStream = stream;
+		editStreamName = stream.name;
+	}
+
+	async function saveStreamEdit() {
+		if (!editingStream || !editStreamName.trim()) return;
+
+		try {
+			await api.updateStream(editingStream.id, { name: editStreamName });
+			editingStream = null;
+			editStreamName = '';
+		} catch (err) {
+			console.error('Failed to update stream:', err);
+			alert('Failed to update stream: ' + (err as Error).message);
 		}
 	}
 
@@ -119,19 +140,44 @@
 					<div class="flex items-center gap-2">
 						<span class="text-2xl">{getStreamIcon(stream.type)}</span>
 						<div>
-							<h3 class="font-semibold text-gray-900 dark:text-white">{stream.name}</h3>
+							<h3 class="font-semibold text-gray-900 dark:text-white">
+								{stream.name}
+								{#if stream.type === 'rca' && stream.config?.index !== undefined}
+									<span class="text-xs text-gray-500 dark:text-gray-400">
+										(Source {stream.config.index + 1})
+									</span>
+								{/if}
+							</h3>
 							<p class="text-xs text-gray-600 dark:text-gray-400">{stream.type}</p>
 						</div>
 					</div>
 
-					{#if stream.type !== 'rca' && stream.type !== 'aux'}
-						<button
-							onclick={() => deleteStream(stream.id)}
-							class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
-						>
-							🗑️
-						</button>
-					{/if}
+					<div class="flex gap-1">
+						{#if stream.type === 'rca' || stream.type === 'aux'}
+							<button
+								onclick={() => startEditStream(stream)}
+								class="rounded p-1 text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+								title="Rename"
+							>
+								✏️
+							</button>
+						{:else}
+							<button
+								onclick={() => startEditStream(stream)}
+								class="rounded p-1 text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+								title="Edit"
+							>
+								✏️
+							</button>
+							<button
+								onclick={() => deleteStream(stream.id)}
+								class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
+								title="Delete"
+							>
+								🗑️
+							</button>
+						{/if}
+					</div>
 				</div>
 
 				<!-- Stream info -->
@@ -313,6 +359,77 @@
 					class="flex-1 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
 				>
 					Create
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Edit stream dialog -->
+{#if editingStream}
+	<div
+		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+		role="dialog"
+		aria-modal="true"
+		onclick={(e) => {
+			if (e.target === e.currentTarget) {
+				editingStream = null;
+				editStreamName = '';
+			}
+		}}
+		onkeydown={(e) => {
+			if (e.key === 'Escape') {
+				editingStream = null;
+				editStreamName = '';
+			}
+		}}
+	>
+		<div
+			class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl dark:bg-gray-800"
+			role="document"
+			onclick={(e) => e.stopPropagation()}
+		>
+			<h3 class="mb-4 text-lg font-semibold text-gray-900 dark:text-white">
+				{editingStream.type === 'rca' || editingStream.type === 'aux' ? 'Rename' : 'Edit'} Stream
+			</h3>
+
+			<div class="mb-4">
+				<label for="edit-stream-name" class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+					Stream Name
+				</label>
+				<input
+					id="edit-stream-name"
+					type="text"
+					bind:value={editStreamName}
+					placeholder="e.g., Front Porch RCA"
+					class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+					autofocus
+				/>
+			</div>
+
+			{#if editingStream.type === 'rca'}
+				<p class="mb-4 text-sm text-gray-600 dark:text-gray-400">
+					This RCA input is connected to Source {editingStream.config?.index !== undefined ? (editingStream.config.index as number) + 1 : 'Unknown'}.
+					Give it a descriptive name like "CD Player" or "Turntable".
+				</p>
+			{/if}
+
+			<div class="flex gap-2">
+				<button
+					onclick={() => {
+						editingStream = null;
+						editStreamName = '';
+					}}
+					class="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+				>
+					Cancel
+				</button>
+				<button
+					onclick={saveStreamEdit}
+					disabled={!editStreamName.trim()}
+					class="flex-1 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+				>
+					Save
 				</button>
 			</div>
 		</div>

@@ -57,10 +57,10 @@ func DefaultState() State {
 	f := false
 	streams := []Stream{
 		{ID: AuxStreamID, Name: "Aux", Type: StreamTypeAux, Disabled: &f, Browsable: &f},
-		{ID: RCAStream0, Name: "Input 1", Type: StreamTypeRCA, Disabled: &f, Browsable: &f},
-		{ID: RCAStream1, Name: "Input 2", Type: StreamTypeRCA, Disabled: &f, Browsable: &f},
-		{ID: RCAStream2, Name: "Input 3", Type: StreamTypeRCA, Disabled: &f, Browsable: &f},
-		{ID: RCAStream3, Name: "Input 4", Type: StreamTypeRCA, Disabled: &f, Browsable: &f},
+		{ID: RCAStream0, Name: "Input 1", Type: StreamTypeRCA, Disabled: &f, Browsable: &f, Config: map[string]interface{}{"index": 0}},
+		{ID: RCAStream1, Name: "Input 2", Type: StreamTypeRCA, Disabled: &f, Browsable: &f, Config: map[string]interface{}{"index": 1}},
+		{ID: RCAStream2, Name: "Input 3", Type: StreamTypeRCA, Disabled: &f, Browsable: &f, Config: map[string]interface{}{"index": 2}},
+		{ID: RCAStream3, Name: "Input 4", Type: StreamTypeRCA, Disabled: &f, Browsable: &f, Config: map[string]interface{}{"index": 3}},
 	}
 
 	return State{
@@ -171,6 +171,7 @@ func defaultStateForProfile(p *hardware.HardwareProfile) State {
 				Type:      StreamTypeRCA,
 				Disabled:  &f,
 				Browsable: &f,
+				Config:    map[string]interface{}{"index": i},
 			})
 		}
 	}

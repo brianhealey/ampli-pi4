@@ -8,7 +8,8 @@ import (
 )
 
 func (h *Handlers) getState(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, h.ctrl.State())
+	state := h.ctrl.State()
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (h *Handlers) getSources(w http.ResponseWriter, r *http.Request) {

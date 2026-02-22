@@ -37,22 +37,32 @@
 		return percent / 100;
 	}
 
-	async function assignStreamToSource(sourceId: number, streamId: number) {
+	async function updateSourceInput(sourceId: number, input: string) {
 		try {
-			const input = streamId >= 0 ? `stream=${streamId}` : '';
 			await api.updateSource(sourceId, { input });
 		} catch (err) {
-			console.error('Failed to assign stream:', err);
+			console.error('Failed to update source input:', err);
 		}
 	}
 
+	async function assignStreamToSource(sourceId: number, streamId: number) {
+		const input = streamId >= 0 ? `stream=${streamId}` : '';
+		await updateSourceInput(sourceId, input);
+	}
+
+	function getSourceInputType(source: Source): 'local' | 'stream' {
+		return source.input === 'local' || source.input === '' ? 'local' : 'stream';
+	}
+
 	function toggleGroupExpanded(groupId: number) {
-		if (expandedGroups.has(groupId)) {
-			expandedGroups.delete(groupId);
+		// Create a new Set to ensure reactivity triggers
+		const newExpanded = new Set(expandedGroups);
+		if (newExpanded.has(groupId)) {
+			newExpanded.delete(groupId);
 		} else {
-			expandedGroups.add(groupId);
+			newExpanded.add(groupId);
 		}
-		expandedGroups = expandedGroups;
+		expandedGroups = newExpanded;
 	}
 
 	function getSourceStream(source: Source) {
