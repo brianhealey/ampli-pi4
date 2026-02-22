@@ -5,8 +5,8 @@
 	import { filterZonesByGroup } from '$lib/grouping';
 
 	let expandedGroups = $state<Set<number>>(new Set());
-	// Track previous vol_f for each group to calculate deltas
-	let groupVolF = $state<Map<number, number>>(new Map());
+	// Track previous slider position (0-100) for each group to calculate deltas
+	let groupSliderPos = $state<Map<number, number>>(new Map());
 
 	// Filter zones into groups and standalone
 	const enabledZones = $derived(amplipi.zones.filter((z) => !z.disabled));
@@ -21,10 +21,15 @@
 	}
 
 	async function updateGroup(groupId: number, update: { mute?: boolean; vol_delta?: number }) {
+		const start = performance.now();
+		console.log(`[API] updateGroup(${groupId}, ${JSON.stringify(update)}) - START`);
 		try {
 			await api.updateGroup(groupId, update);
+			const elapsed = performance.now() - start;
+			console.log(`[API] updateGroup(${groupId}) - DONE in ${elapsed.toFixed(1)}ms`);
 		} catch (err) {
-			console.error('Failed to update group:', err);
+			const elapsed = performance.now() - start;
+			console.error(`[API] updateGroup(${groupId}) - FAILED after ${elapsed.toFixed(1)}ms:`, err);
 		}
 	}
 
@@ -34,11 +39,6 @@
 
 	function percentToVolF(percent: number): number {
 		return percent / 100;
-	}
-
-	// Convert vol_f delta to dB delta (assumes -79 to 0 dB range)
-	function volFDeltaToDbDelta(deltaVolF: number): number {
-		return Math.round(deltaVolF * 79);
 	}
 
 	function toggleGroupExpanded(groupId: number) {
@@ -115,17 +115,23 @@
 								max="100"
 								value={volFToPercent(group.vol_f ?? 0)}
 								oninput={(e) => {
-									const percent = parseInt(e.currentTarget.value);
-									const newVolF = percentToVolF(percent);
-									const oldVolF = groupVolF.get(group.id) ?? group.vol_f ?? 0;
-									const deltaVolF = newVolF - oldVolF;
-									const volDelta = volFDeltaToDbDelta(deltaVolF);
+									const newPos = parseInt(e.currentTarget.value);
+									const oldPos = groupSliderPos.get(group.id) ?? volFToPercent(group.vol_f ?? 0);
+									const deltaPercent = newPos - oldPos;
 
-									// Track new vol_f for next delta calculation
-									groupVolF.set(group.id, newVolF);
+									// Convert percent delta to dB delta (79 dB range)
+									const volDelta = Math.round((deltaPercent / 100) * 79);
+
+									console.log(`[Group ${group.id}] Slider: ${oldPos}% -> ${newPos}% (delta: ${deltaPercent}%, ${volDelta}dB)`);
+
+									// Track new position for next delta calculation
+									groupSliderPos.set(group.id, newPos);
 
 									if (volDelta !== 0) {
+										console.log(`[Group ${group.id}] Sending vol_delta: ${volDelta}`);
 										updateGroup(group.id, { vol_delta: volDelta, mute: false });
+									} else {
+										console.log(`[Group ${group.id}] No change (volDelta === 0)`);
 									}
 								}}
 								class="w-full accent-purple-600"

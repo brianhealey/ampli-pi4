@@ -6,8 +6,8 @@ Wants=network.target
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi
-ExecStart=/usr/local/bin/amplipi --addr :80
+WorkingDirectory=/home/pi/amplipi-go
+ExecStart=/home/pi/amplipi-go/amplipi --addr :80
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

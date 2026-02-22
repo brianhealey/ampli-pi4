@@ -7,9 +7,9 @@ PI_BIN    := /home/pi/amplipi-go
 # ── Web UI build ──────────────────────────────────────────────────────────────
 web-build:
 	@echo "Building web UI..."
+	@rm -rf web/dist web/.svelte-kit cmd/amplipi/static
 	@cd web && npm install && npm run build
 	@echo "Copying web assets to cmd/amplipi/static..."
-	@rm -rf cmd/amplipi/static
 	@cp -r web/dist cmd/amplipi/static
 	@echo "Web UI built successfully"
 
@@ -51,22 +51,23 @@ run: build
 	$(BIN_DIR)/amplipi
 
 # ── Deploy to AmpliPi ─────────────────────────────────────────────────────────
-# Copies the arm binary to the Pi and optionally restarts it.
-deploy: build-pi
-	ssh $(PI_HOST) 'sudo systemctl stop amplipi.service || true'
-	scp $(BIN_DIR)/amplipi-arm64 $(PI_HOST):$(PI_BIN)/amplipi
+# Copies the arm binary to the Pi and uses deployment script
+deploy: build-pi scripts-sync
+	scp $(BIN_DIR)/amplipi-arm64 $(PI_HOST):/tmp/amplipi-arm64
+	ssh $(PI_HOST) 'cd $(PI_BIN) && ./scripts/deploy.sh /tmp/amplipi-arm64 --stop'
 	@echo "Deployed to $(PI_HOST):$(PI_BIN)/amplipi"
 
 # Deploy and restart systemd service
-deploy-run: deploy
-	ssh $(PI_HOST) 'sudo systemctl start amplipi.service && sudo systemctl status amplipi.service --no-pager -l'
+deploy-run: build-pi scripts-sync
+	scp $(BIN_DIR)/amplipi-arm64 $(PI_HOST):/tmp/amplipi-arm64
+	ssh $(PI_HOST) 'cd $(PI_BIN) && ./scripts/deploy.sh /tmp/amplipi-arm64 --restart'
 
 # Alias for deploy-run (systemd service runs with real hardware by default)
 deploy-run-hw: deploy-run
 
 # Stop the systemd service on the Pi
 deploy-stop:
-	ssh $(PI_HOST) 'sudo systemctl stop amplipi.service && echo stopped'
+	ssh $(PI_HOST) 'cd $(PI_BIN) && ./scripts/deploy.sh /tmp/amplipi --stop'
 
 # Restart the systemd service on the Pi
 deploy-restart:
@@ -98,5 +99,6 @@ setup-pi:
 # Sync scripts/ to Pi without running them
 # Useful for iterating on scripts before committing
 scripts-sync:
-	rsync -av --mkpath scripts/ $(PI_HOST):$(PI_BIN)/scripts/
+	ssh $(PI_HOST) 'mkdir -p $(PI_BIN)/scripts'
+	rsync -av scripts/ $(PI_HOST):$(PI_BIN)/scripts/
 	ssh $(PI_HOST) 'chmod +x $(PI_BIN)/scripts/setup.sh $(PI_BIN)/scripts/lib/*.sh'
