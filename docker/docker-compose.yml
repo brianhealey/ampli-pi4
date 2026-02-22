@@ -1,0 +1,129 @@
+# docker-compose.yml - Development Environment
+# For local development and testing (macOS/Linux)
+
+services:
+  # Main application container
+  amplipi:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.amplipi
+    image: amplipi:local
+    container_name: amplipi-dev
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - amplipi-config:/config
+      - amplipi-logs:/logs
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 100M
+    environment:
+      - CONFIG_DIR=/config
+      - LOG_LEVEL=debug
+      - HARDWARE_MOCK=true  # Mock hardware for development
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/api/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - amplipi-dev
+
+  # Display driver container
+  amplipi-display:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.display
+    image: amplipi-display:local
+    container_name: amplipi-display-dev
+    restart: unless-stopped
+    depends_on:
+      amplipi:
+        condition: service_healthy
+    environment:
+      - API_URL=http://amplipi:80/api
+      - DISPLAY_TYPE=tft
+      - REFRESH_INTERVAL=1000
+    networks:
+      - amplipi-dev
+
+  # Optional streaming services (use --profile streaming to enable)
+
+  # Spotify Connect
+  spotify:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.spotify
+    image: amplipi-spotify:local
+    container_name: amplipi-spotify-dev
+    restart: unless-stopped
+    environment:
+      - SPOTIFY_NAME=AmpliPi Dev
+      - ALSA_DEVICE=default
+      - SPOTIFY_BITRATE=320
+    profiles:
+      - streaming
+    networks:
+      - amplipi-dev
+
+  # Pandora
+  pandora:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.pandora
+    image: amplipi-pandora:local
+    container_name: amplipi-pandora-dev
+    restart: unless-stopped
+    volumes:
+      - amplipi-config:/config:ro
+    environment:
+      - ALSA_DEVICE=default
+    profiles:
+      - streaming
+    networks:
+      - amplipi-dev
+
+  # LMS (Logitech Media Server client)
+  lms:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.lms
+    image: amplipi-lms:local
+    container_name: amplipi-lms-dev
+    restart: unless-stopped
+    environment:
+      - LMS_NAME=AmpliPi Dev
+      - ALSA_DEVICE=default
+    profiles:
+      - streaming
+    networks:
+      - amplipi-dev
+
+  # DLNA Renderer
+  dlna:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dlna
+    image: amplipi-dlna:local
+    container_name: amplipi-dlna-dev
+    restart: unless-stopped
+    environment:
+      - DLNA_NAME=AmpliPi Dev
+      - ALSA_DEVICE=default
+    profiles:
+      - streaming
+    networks:
+      - amplipi-dev
+
+volumes:
+  amplipi-config:
+    driver: local
+  amplipi-logs:
+    driver: local
+
+networks:
+  amplipi-dev:
+    driver: bridge

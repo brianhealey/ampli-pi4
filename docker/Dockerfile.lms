@@ -1,0 +1,69 @@
+# Dockerfile.lms - LMS Client Container (squeezelite)
+# Multi-stage build for minimal runtime image
+
+# ============================================================================
+# Build Stage
+# ============================================================================
+FROM debian:bookworm-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    libasound2-dev \
+    libflac-dev \
+    libmad0-dev \
+    libvorbis-dev \
+    libfaad-dev \
+    libmpg123-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build squeezelite
+WORKDIR /build
+RUN git clone https://github.com/ralph-irving/squeezelite.git . && \
+    make && \
+    make install DESTDIR=/install
+
+# ============================================================================
+# Runtime Stage
+# ============================================================================
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libasound2 \
+    libflac12 \
+    libmad0 \
+    libvorbisfile3 \
+    libfaad2 \
+    libmpg123-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy binary from builder
+COPY --from=builder /install/usr/local/bin/squeezelite /usr/local/bin/squeezelite
+
+# Create startup script
+COPY <<'EOF' /usr/local/bin/start-lms.sh
+#!/bin/sh
+set -e
+
+# Start squeezelite with configuration
+exec squeezelite \
+    -n "${LMS_NAME:-AmpliPi}" \
+    -o "${ALSA_DEVICE:-default}" \
+    -a "80:4::" \
+    -d all=info \
+    ${LMS_SERVER:+-s ${LMS_SERVER}}
+EOF
+
+RUN chmod +x /usr/local/bin/start-lms.sh
+
+# Expose ports for LMS discovery
+EXPOSE 3483/tcp 3483/udp
+
+# Set environment variables
+ENV LMS_NAME=AmpliPi \
+    ALSA_DEVICE=default
+
+# Entry point
+ENTRYPOINT ["/usr/local/bin/start-lms.sh"]

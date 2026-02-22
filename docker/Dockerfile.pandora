@@ -1,0 +1,81 @@
+# Dockerfile.pandora - Pandora Container (pianobar)
+# Multi-stage build for minimal runtime image
+
+# ============================================================================
+# Build Stage
+# ============================================================================
+FROM debian:bookworm-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    cmake \
+    pkg-config \
+    libao-dev \
+    libfaad-dev \
+    libmad0-dev \
+    libjson-c-dev \
+    libgcrypt20-dev \
+    libgnutls28-dev \
+    libcurl4-gnutls-dev \
+    libasound2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build pianobar
+WORKDIR /build
+RUN git clone https://github.com/PromyLOPh/pianobar.git . && \
+    make && \
+    make install DESTDIR=/install
+
+# ============================================================================
+# Runtime Stage
+# ============================================================================
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libao4 \
+    libfaad2 \
+    libmad0 \
+    libjson-c5 \
+    libgcrypt20 \
+    libgnutls30 \
+    libcurl4 \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy binary from builder
+COPY --from=builder /install/usr/local/bin/pianobar /usr/local/bin/pianobar
+
+# Create configuration directory
+RUN mkdir -p /root/.config/pianobar
+
+# Create startup script
+COPY <<'EOF' /usr/local/bin/start-pandora.sh
+#!/bin/bash
+set -e
+
+# Generate pianobar configuration
+cat > /root/.config/pianobar/config <<CONFIG
+audio_quality = high
+alsa_device = ${ALSA_DEVICE:-default}
+autostart_station = 0
+CONFIG
+
+# Check for credentials in /config
+if [ -f /config/pandora-credentials ]; then
+    cat /config/pandora-credentials >> /root/.config/pianobar/config
+fi
+
+# Start pianobar
+exec pianobar
+EOF
+
+RUN chmod +x /usr/local/bin/start-pandora.sh
+
+# Set environment variables
+ENV ALSA_DEVICE=default
+
+# Entry point
+ENTRYPOINT ["/usr/local/bin/start-pandora.sh"]

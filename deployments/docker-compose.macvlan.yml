@@ -1,0 +1,38 @@
+# docker-compose.macvlan.yml - Macvlan Network Configuration Override
+# Use this to customize macvlan settings without modifying docker-compose.prod.yml
+# Usage: docker-compose -f docker-compose.prod.yml -f docker-compose.macvlan.yml up
+
+# This file can be customized per-installation for different network configurations
+
+services:
+  airplay-1:
+    networks:
+      amplipi-macvlan:
+        ipv4_address: ${AIRPLAY1_IP:-192.168.1.100}
+
+  airplay-2:
+    networks:
+      amplipi-macvlan:
+        ipv4_address: ${AIRPLAY2_IP:-192.168.1.101}
+
+  airplay-3:
+    networks:
+      amplipi-macvlan:
+        ipv4_address: ${AIRPLAY3_IP:-192.168.1.102}
+
+  airplay-4:
+    networks:
+      amplipi-macvlan:
+        ipv4_address: ${AIRPLAY4_IP:-192.168.1.103}
+
+networks:
+  amplipi-macvlan:
+    driver: macvlan
+    driver_opts:
+      parent: ${MACVLAN_PARENT:-eth0}
+    ipam:
+      driver: default
+      config:
+        - subnet: ${MACVLAN_SUBNET:-192.168.1.0/24}
+          gateway: ${MACVLAN_GATEWAY:-192.168.1.1}
+          ip_range: ${MACVLAN_IP_RANGE:-192.168.1.100/30}

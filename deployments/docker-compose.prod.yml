@@ -1,0 +1,200 @@
+# docker-compose.prod.yml - Production Deployment
+# For Raspberry Pi CM4S with hardware access
+
+services:
+  # Main application container
+  amplipi:
+    image: ${AMPLIPI_IMAGE:-ghcr.io/brianhealey/amplipi:latest}
+    container_name: amplipi
+    restart: unless-stopped
+    network_mode: host
+    devices:
+      - /dev/i2c-1:/dev/i2c-1           # I2C hardware access
+      - /dev/gpiochip0:/dev/gpiochip0   # GPIO for STM32 reset
+      - /dev/snd:/dev/snd               # ALSA devices (loopback)
+    volumes:
+      - amplipi-config:/config
+      - amplipi-logs:/logs
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker API for update manager
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 100M
+    environment:
+      - CONFIG_DIR=/config
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - HARDWARE_MOCK=${HARDWARE_MOCK:-false}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/api/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Display driver (TFT/eInk)
+  amplipi-display:
+    image: ${DISPLAY_IMAGE:-ghcr.io/brianhealey/amplipi-display:latest}
+    container_name: amplipi-display
+    restart: unless-stopped
+    network_mode: host
+    devices:
+      - /dev/spidev0.0:/dev/spidev0.0   # SPI for TFT display
+      - /dev/gpiochip0:/dev/gpiochip0   # GPIO for display control
+    depends_on:
+      amplipi:
+        condition: service_healthy
+    environment:
+      - API_URL=http://localhost/api
+      - DISPLAY_TYPE=${DISPLAY_TYPE:-tft}
+      - REFRESH_INTERVAL=1000
+
+  # AirPlay2 Instance 1
+  airplay-1:
+    image: ${AIRPLAY_IMAGE:-ghcr.io/brianhealey/amplipi-airplay:latest}
+    container_name: airplay-1
+    restart: unless-stopped
+    hostname: amplipi-source-1
+    networks:
+      amplipi-macvlan:
+        ipv4_address: ${AIRPLAY1_IP:-192.168.1.100}
+      amplipi-internal:
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      - AIRPLAY_NAME=AmpliPi Source 1
+      - ALSA_DEVICE=lb0c
+      - AIRPLAY2_ENABLED=true
+
+  # AirPlay2 Instance 2
+  airplay-2:
+    image: ${AIRPLAY_IMAGE:-ghcr.io/brianhealey/amplipi-airplay:latest}
+    container_name: airplay-2
+    restart: unless-stopped
+    hostname: amplipi-source-2
+    networks:
+      amplipi-macvlan:
+        ipv4_address: ${AIRPLAY2_IP:-192.168.1.101}
+      amplipi-internal:
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      - AIRPLAY_NAME=AmpliPi Source 2
+      - ALSA_DEVICE=lb1c
+      - AIRPLAY2_ENABLED=true
+
+  # AirPlay2 Instance 3
+  airplay-3:
+    image: ${AIRPLAY_IMAGE:-ghcr.io/brianhealey/amplipi-airplay:latest}
+    container_name: airplay-3
+    restart: unless-stopped
+    hostname: amplipi-source-3
+    networks:
+      amplipi-macvlan:
+        ipv4_address: ${AIRPLAY3_IP:-192.168.1.102}
+      amplipi-internal:
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      - AIRPLAY_NAME=AmpliPi Source 3
+      - ALSA_DEVICE=lb2c
+      - AIRPLAY2_ENABLED=true
+
+  # AirPlay2 Instance 4
+  airplay-4:
+    image: ${AIRPLAY_IMAGE:-ghcr.io/brianhealey/amplipi-airplay:latest}
+    container_name: airplay-4
+    restart: unless-stopped
+    hostname: amplipi-source-4
+    networks:
+      amplipi-macvlan:
+        ipv4_address: ${AIRPLAY4_IP:-192.168.1.103}
+      amplipi-internal:
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      - AIRPLAY_NAME=AmpliPi Source 4
+      - ALSA_DEVICE=lb3c
+      - AIRPLAY2_ENABLED=true
+
+  # Optional Streaming Services (enable with --profile streaming)
+
+  # Spotify Connect
+  spotify:
+    image: ${SPOTIFY_IMAGE:-ghcr.io/brianhealey/amplipi-spotify:latest}
+    container_name: amplipi-spotify
+    restart: unless-stopped
+    network_mode: host
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      - SPOTIFY_NAME=${SPOTIFY_NAME:-AmpliPi}
+      - ALSA_DEVICE=lb4c
+      - SPOTIFY_BITRATE=${SPOTIFY_BITRATE:-320}
+    profiles:
+      - streaming
+
+  # Pandora
+  pandora:
+    image: ${PANDORA_IMAGE:-ghcr.io/brianhealey/amplipi-pandora:latest}
+    container_name: amplipi-pandora
+    restart: unless-stopped
+    network_mode: host
+    devices:
+      - /dev/snd:/dev/snd
+    volumes:
+      - amplipi-config:/config:ro
+    environment:
+      - ALSA_DEVICE=lb5c
+    profiles:
+      - streaming
+
+  # LMS Client
+  lms:
+    image: ${LMS_IMAGE:-ghcr.io/brianhealey/amplipi-lms:latest}
+    container_name: amplipi-lms
+    restart: unless-stopped
+    network_mode: host
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      - LMS_NAME=${LMS_NAME:-AmpliPi}
+      - ALSA_DEVICE=lb6c
+    profiles:
+      - streaming
+
+  # DLNA Renderer
+  dlna:
+    image: ${DLNA_IMAGE:-ghcr.io/brianhealey/amplipi-dlna:latest}
+    container_name: amplipi-dlna
+    restart: unless-stopped
+    network_mode: host
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      - DLNA_NAME=${DLNA_NAME:-AmpliPi}
+      - ALSA_DEVICE=lb7c
+    profiles:
+      - streaming
+
+volumes:
+  amplipi-config:
+    driver: local
+  amplipi-logs:
+    driver: local
+
+networks:
+  # Macvlan network for AirPlay2 instances (separate IPs)
+  amplipi-macvlan:
+    driver: macvlan
+    driver_opts:
+      parent: ${MACVLAN_PARENT:-eth0}
+    ipam:
+      driver: default
+      config:
+        - subnet: ${MACVLAN_SUBNET:-192.168.1.0/24}
+          gateway: ${MACVLAN_GATEWAY:-192.168.1.1}
+          ip_range: ${MACVLAN_IP_RANGE:-192.168.1.100/30}
+
+  # Internal bridge network for inter-container communication
+  amplipi-internal:
+    driver: bridge

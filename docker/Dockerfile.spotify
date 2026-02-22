@@ -1,0 +1,73 @@
+# Dockerfile.spotify - Spotify Connect Container (go-librespot)
+# Multi-stage build for minimal runtime image
+
+# ============================================================================
+# Build Stage
+# ============================================================================
+FROM golang:1.26-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    git \
+    make \
+    gcc \
+    musl-dev \
+    alsa-lib-dev
+
+# Clone and build go-librespot
+WORKDIR /build
+RUN git clone https://github.com/devgianlu/go-librespot.git . && \
+    go mod download && \
+    go build -o go-librespot ./cmd/daemon
+
+# ============================================================================
+# Runtime Stage
+# ============================================================================
+FROM alpine:latest
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    alsa-lib \
+    alsa-utils \
+    ca-certificates
+
+# Copy binary from builder
+COPY --from=builder /build/go-librespot /usr/local/bin/go-librespot
+
+# Create configuration directory
+RUN mkdir -p /config
+
+# Create startup script
+COPY <<'EOF' /usr/local/bin/start-spotify.sh
+#!/bin/sh
+set -e
+
+# Generate go-librespot configuration
+cat > /config/config.yml <<CONFIG
+device_name: ${SPOTIFY_NAME:-AmpliPi}
+device_type: speaker
+bitrate: ${SPOTIFY_BITRATE:-320}
+
+alsa:
+  device: ${ALSA_DEVICE:-default}
+  mixer: PCM
+
+log_level: info
+CONFIG
+
+# Start go-librespot
+exec go-librespot --config /config/config.yml
+EOF
+
+RUN chmod +x /usr/local/bin/start-spotify.sh
+
+# Expose Spotify Connect port
+EXPOSE 57621/tcp
+
+# Set environment variables
+ENV SPOTIFY_NAME=AmpliPi \
+    ALSA_DEVICE=default \
+    SPOTIFY_BITRATE=320
+
+# Entry point
+ENTRYPOINT ["/usr/local/bin/start-spotify.sh"]

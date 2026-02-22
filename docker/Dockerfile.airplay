@@ -1,0 +1,129 @@
+# Dockerfile.airplay - AirPlay2 Container (shairport-sync)
+# Multi-stage build for minimal runtime image
+
+# ============================================================================
+# Build Stage
+# ============================================================================
+FROM debian:bookworm-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    autoconf \
+    automake \
+    libtool \
+    libpopt-dev \
+    libconfig-dev \
+    libasound2-dev \
+    avahi-daemon \
+    libavahi-client-dev \
+    libssl-dev \
+    libsoxr-dev \
+    libplist-dev \
+    libsodium-dev \
+    libgcrypt20-dev \
+    xxd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build nqptp (PTP support for AirPlay 2)
+WORKDIR /build/nqptp
+RUN git clone https://github.com/mikebrady/nqptp.git . && \
+    autoreconf -fi && \
+    ./configure && \
+    make && \
+    make install
+
+# Build shairport-sync with AirPlay 2 support
+WORKDIR /build/shairport-sync
+RUN git clone --branch master https://github.com/mikebrady/shairport-sync.git . && \
+    autoreconf -fi && \
+    ./configure \
+        --with-alsa \
+        --with-avahi \
+        --with-ssl=openssl \
+        --with-soxr \
+        --with-airplay-2 \
+        --with-metadata \
+        --sysconfdir=/etc && \
+    make && \
+    make install
+
+# ============================================================================
+# Runtime Stage
+# ============================================================================
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    alsa-utils \
+    avahi-daemon \
+    libavahi-client3 \
+    libconfig9 \
+    libpopt0 \
+    libsoxr0 \
+    libssl3 \
+    libplist3 \
+    libsodium23 \
+    libgcrypt20 \
+    dbus \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy binaries from builder
+COPY --from=builder /usr/local/bin/nqptp /usr/local/bin/nqptp
+COPY --from=builder /usr/local/bin/shairport-sync /usr/local/bin/shairport-sync
+COPY --from=builder /usr/local/lib/*nqptp* /usr/local/lib/
+COPY --from=builder /usr/local/lib/*shairport* /usr/local/lib/
+
+# Update library cache
+RUN ldconfig
+
+# Create configuration directory
+RUN mkdir -p /etc/shairport-sync
+
+# Create startup script
+COPY <<'EOF' /usr/local/bin/start-airplay.sh
+#!/bin/sh
+set -e
+
+# Start nqptp for AirPlay 2 PTP
+nqptp &
+
+# Wait for nqptp to initialize
+sleep 2
+
+# Generate shairport-sync configuration
+cat > /etc/shairport-sync/shairport-sync.conf <<CONFIG
+general = {
+    name = "${AIRPLAY_NAME:-AmpliPi}";
+    interpolation = "soxr";
+    output_backend = "alsa";
+};
+
+alsa = {
+    output_device = "${ALSA_DEVICE:-default}";
+    mixer_control_name = "PCM";
+};
+
+sessioncontrol = {
+    allow_session_interruption = "yes";
+    session_timeout = 20;
+};
+CONFIG
+
+# Start shairport-sync
+exec shairport-sync -c /etc/shairport-sync/shairport-sync.conf
+EOF
+
+RUN chmod +x /usr/local/bin/start-airplay.sh
+
+# Expose AirPlay ports
+EXPOSE 5000/tcp 5353/udp 7000/tcp 319/udp 320/udp
+
+# Set environment variables
+ENV AIRPLAY_NAME=AmpliPi \
+    ALSA_DEVICE=default \
+    AIRPLAY2_ENABLED=true
+
+# Entry point
+ENTRYPOINT ["/usr/local/bin/start-airplay.sh"]

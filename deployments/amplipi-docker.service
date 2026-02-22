@@ -1,0 +1,35 @@
+[Unit]
+Description=AmpliPi Docker Compose Stack
+Documentation=https://github.com/micro-nova/amplipi
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/pi/amplipi-docker
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Start all containers
+ExecStart=/usr/bin/docker-compose -f docker-compose.prod.yml up -d
+
+# Stop all containers gracefully
+ExecStop=/usr/bin/docker-compose -f docker-compose.prod.yml down
+
+# Restart policy
+Restart=on-failure
+RestartSec=10s
+
+# Security hardening
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/home/pi/amplipi-docker
+
+# Resource limits (optional, commented out by default)
+# MemoryLimit=2G
+# CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

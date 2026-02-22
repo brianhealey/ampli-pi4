@@ -1,0 +1,65 @@
+# Dockerfile.display - AmpliPi Display Driver Container
+# Multi-stage build for TFT/eInk display controller
+
+# ============================================================================
+# Build Stage
+# ============================================================================
+FROM golang:1.26-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    git \
+    make \
+    gcc \
+    musl-dev
+
+# Set working directory
+WORKDIR /build
+
+# Copy go module files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the display driver
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
+    go build \
+    -ldflags="-w -s" \
+    -o amplipi-display \
+    ./cmd/amplipi-display
+
+# ============================================================================
+# Runtime Stage
+# ============================================================================
+FROM alpine:latest
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    curl \
+    tzdata
+
+# Create non-root user
+RUN addgroup -g 1000 amplipi && \
+    adduser -D -u 1000 -G amplipi amplipi
+
+# Copy binary from builder
+COPY --from=builder /build/amplipi-display /usr/local/bin/amplipi-display
+
+# Set working directory
+WORKDIR /app
+
+# Run as non-root user
+USER amplipi
+
+# Set environment variables
+ENV API_URL=http://localhost/api \
+    DISPLAY_TYPE=tft \
+    REFRESH_INTERVAL=1000
+
+# Entry point
+ENTRYPOINT ["/usr/local/bin/amplipi-display"]

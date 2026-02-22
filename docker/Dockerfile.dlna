@@ -1,0 +1,71 @@
+# Dockerfile.dlna - DLNA Renderer Container (gmrender-resurrect)
+# Multi-stage build for minimal runtime image
+
+# ============================================================================
+# Build Stage
+# ============================================================================
+FROM debian:bookworm-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    autoconf \
+    automake \
+    libtool \
+    pkg-config \
+    libupnp-dev \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build gmrender-resurrect
+WORKDIR /build
+RUN git clone https://github.com/hzeller/gmrender-resurrect.git . && \
+    ./autogen.sh && \
+    ./configure --prefix=/usr && \
+    make && \
+    make install DESTDIR=/install
+
+# ============================================================================
+# Runtime Stage
+# ============================================================================
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libupnp17 \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-alsa \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy binary and files from builder
+COPY --from=builder /install/usr/bin/gmediarender /usr/bin/gmediarender
+COPY --from=builder /install/usr/share/gmediarender /usr/share/gmediarender
+
+# Create startup script
+COPY <<'EOF' /usr/local/bin/start-dlna.sh
+#!/bin/sh
+set -e
+
+# Start gmediarender
+exec gmediarender \
+    --friendly-name "${DLNA_NAME:-AmpliPi}" \
+    --gstout-audiosink "alsasink device=${ALSA_DEVICE:-default}" \
+    --logfile /dev/stdout
+EOF
+
+RUN chmod +x /usr/local/bin/start-dlna.sh
+
+# Expose UPnP ports
+EXPOSE 49152/tcp 49153/tcp 1900/udp
+
+# Set environment variables
+ENV DLNA_NAME=AmpliPi \
+    ALSA_DEVICE=default
+
+# Entry point
+ENTRYPOINT ["/usr/local/bin/start-dlna.sh"]

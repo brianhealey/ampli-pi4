@@ -47,7 +47,7 @@ web/.env.*
 
 # Embedded web directory (copied during build)
 cmd/amplipi/web/
-cmd/amplipi/static/
+# cmd/amplipi/static/ - Commented out: static files needed for Docker builds
 
 # npm
 npm-debug.log*
