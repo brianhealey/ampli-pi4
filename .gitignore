@@ -37,7 +37,8 @@ Thumbs.db
 
 # Web UI - Node/npm artifacts
 web/node_modules/
-web/dist/
+web/dist/*
+!web/dist/.gitkeep
 web/.svelte-kit/
 web/build/
 web/.env
@@ -46,6 +47,7 @@ web/.env.*
 
 # Embedded web directory (copied during build)
 cmd/amplipi/web/
+cmd/amplipi/static/
 
 # npm
 npm-debug.log*

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
 
 	"github.com/micro-nova/amplipi-go/internal/models"
@@ -74,6 +75,9 @@ func migrateState(state *models.State) {
 		}
 	}
 
+	// Ensure default RCA and Aux streams exist (needed for physical RCA inputs)
+	ensureDefaultStreams(state)
+
 	// Validate preset IDs
 	for i := range state.Presets {
 		if state.Presets[i].ID < 0 {
@@ -91,5 +95,52 @@ func migrateState(state *models.State) {
 	}
 	if state.Presets == nil {
 		state.Presets = []models.Preset{}
+	}
+}
+
+// ensureDefaultStreams adds missing default RCA and Aux streams to the state.
+// These streams represent physical hardware inputs and should always be present.
+func ensureDefaultStreams(state *models.State) {
+	// Check which default streams are missing
+	hasAux := false
+	rcaPresent := make(map[int]bool)
+
+	for _, s := range state.Streams {
+		if s.ID == models.AuxStreamID && s.Type == models.StreamTypeAux {
+			hasAux = true
+		}
+		if s.Type == models.StreamTypeRCA {
+			rcaPresent[s.ID] = true
+		}
+	}
+
+	// Add missing default streams
+	f := false
+
+	if !hasAux {
+		slog.Info("config: adding missing Aux stream")
+		state.Streams = append(state.Streams, models.Stream{
+			ID:        models.AuxStreamID,
+			Name:      "Aux",
+			Type:      models.StreamTypeAux,
+			Disabled:  &f,
+			Browsable: &f,
+		})
+	}
+
+	// Add missing RCA streams (Input 1-4)
+	rcaIDs := []int{models.RCAStream0, models.RCAStream1, models.RCAStream2, models.RCAStream3}
+	for i, rcaID := range rcaIDs {
+		if !rcaPresent[rcaID] {
+			name := fmt.Sprintf("Input %d", i+1)
+			slog.Info("config: adding missing RCA stream", "id", rcaID, "name", name)
+			state.Streams = append(state.Streams, models.Stream{
+				ID:        rcaID,
+				Name:      name,
+				Type:      models.StreamTypeRCA,
+				Disabled:  &f,
+				Browsable: &f,
+			})
+		}
 	}
 }

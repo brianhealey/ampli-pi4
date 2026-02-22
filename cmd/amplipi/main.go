@@ -31,7 +31,7 @@ import (
 	"github.com/micro-nova/amplipi-go/internal/zeroconf"
 )
 
-//go:embed all:web/dist
+//go:embed all:static
 var webFiles embed.FS
 
 func main() {
@@ -176,7 +176,7 @@ func main() {
 	router := api.NewRouter(ctrl, authSvc, bus)
 
 	// Add web UI static file handler
-	webFS, err := fs.Sub(webFiles, "web/dist")
+	webFS, err := fs.Sub(webFiles, "static")
 	if err != nil {
 		slog.Error("failed to load web files", "err", err)
 		os.Exit(1)

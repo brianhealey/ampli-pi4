@@ -4,14 +4,23 @@ BIN_DIR   := ./bin
 PI_HOST   := pi@amplipi.local
 PI_BIN    := /home/pi/amplipi-go
 
+# ── Web UI build ──────────────────────────────────────────────────────────────
+web-build:
+	@echo "Building web UI..."
+	@cd web && npm install && npm run build
+	@echo "Copying web assets to cmd/amplipi/static..."
+	@rm -rf cmd/amplipi/static
+	@cp -r web/dist cmd/amplipi/static
+	@echo "Web UI built successfully"
+
 # ── Local build (arm64, for this machine) ─────────────────────────────────────
-build:
+build: web-build
 	@mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/amplipi ./cmd/amplipi/...
 
 # ── Build for AmpliPi (Raspberry Pi 4, 64-bit Raspberry Pi OS / Debian trixie) ─
 # Both host (Turing RK1) and target (Pi 4) are arm64 — no true cross-compilation needed.
-build-pi:
+build-pi: web-build
 	@mkdir -p $(BIN_DIR)
 	GOOS=linux GOARCH=arm64 go build \
 		-ldflags="-s -w" \
