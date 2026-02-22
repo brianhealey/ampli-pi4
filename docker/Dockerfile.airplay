@@ -21,8 +21,13 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     libsoxr-dev \
     libplist-dev \
+    libplist-utils \
     libsodium-dev \
     libgcrypt20-dev \
+    uuid-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
     xxd \
     && rm -rf /var/lib/apt/lists/*
 
@@ -66,6 +71,10 @@ RUN apt-get update && apt-get install -y \
     libplist3 \
     libsodium23 \
     libgcrypt20 \
+    uuid \
+    libavcodec59 \
+    libavformat59 \
+    libavutil57 \
     dbus \
     && rm -rf /var/lib/apt/lists/*
 
