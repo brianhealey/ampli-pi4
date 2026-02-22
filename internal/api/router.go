@@ -69,6 +69,9 @@ func NewRouter(ctrl Controller, authSvc *auth.Service, bus EventBus) http.Handle
 		r.Delete("/api/presets/{pid}", h.deletePreset)
 		r.Post("/api/presets/{pid}/load", h.loadPreset)
 
+		// Announcements
+		r.Post("/api/announce", h.announce)
+
 		// System
 		r.Get("/api/info", h.getInfo)
 		r.Post("/api/factory_reset", h.factoryReset)

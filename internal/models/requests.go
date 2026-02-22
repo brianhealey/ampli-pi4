@@ -66,11 +66,12 @@ type PresetUpdate struct {
 }
 
 // AnnounceRequest is the POST body for making a PA announcement.
+// Compatible with Python's models.Announcement.
 type AnnounceRequest struct {
-	Media    string   `json:"media"`
-	Vol      *int     `json:"vol,omitempty"`
-	VolF     *float64 `json:"vol_f,omitempty"`
-	VolMin   *int     `json:"vol_min,omitempty"`
-	Timeout  *int     `json:"timeout,omitempty"`
-	SourceID *int     `json:"source_id,omitempty"`
+	Media    string   `json:"media"`              // URL to media file
+	Vol      *int     `json:"vol,omitempty"`      // Absolute volume in dB (overrides vol_f)
+	VolF     *float64 `json:"vol_f,omitempty"`    // Relative volume 0.0-1.0 (default 0.5)
+	SourceID *int     `json:"source_id,omitempty"` // Source to use (default 3)
+	Zones    []int    `json:"zones,omitempty"`    // Target zone IDs (if empty, uses all enabled)
+	Groups   []int    `json:"groups,omitempty"`   // Target group IDs (if empty, uses all enabled)
 }
