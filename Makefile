@@ -53,32 +53,32 @@ run: build
 # ── Deploy to AmpliPi ─────────────────────────────────────────────────────────
 # Copies the arm binary to the Pi and optionally restarts it.
 deploy: build-pi
+	ssh $(PI_HOST) 'sudo systemctl stop amplipi.service || true'
 	scp $(BIN_DIR)/amplipi-arm64 $(PI_HOST):$(PI_BIN)/amplipi
 	@echo "Deployed to $(PI_HOST):$(PI_BIN)/amplipi"
 
-# Deploy and run in mock mode (safe — no I2C required)
+# Deploy and restart systemd service
 deploy-run: deploy
-	ssh $(PI_HOST) 'kill -9 $$(cat /tmp/amplipi.pid 2>/dev/null) 2>/dev/null; \
-		cd $(PI_BIN) && \
-		nohup ./amplipi --mock --addr :8080 > /tmp/amplipi.log 2>&1 & \
-		echo $$! > /tmp/amplipi.pid && \
-		echo "Running PID $$(cat /tmp/amplipi.pid)"'
+	ssh $(PI_HOST) 'sudo systemctl start amplipi.service && sudo systemctl status amplipi.service --no-pager -l'
 
-# Deploy and run with real hardware
-deploy-run-hw: deploy
-	ssh $(PI_HOST) 'kill -9 $$(cat /tmp/amplipi.pid 2>/dev/null) 2>/dev/null; \
-		cd $(PI_BIN) && \
-		nohup ./amplipi --addr :8080 > /tmp/amplipi.log 2>&1 & \
-		echo $$! > /tmp/amplipi.pid && \
-		echo "Running PID $$(cat /tmp/amplipi.pid)"'
+# Alias for deploy-run (systemd service runs with real hardware by default)
+deploy-run-hw: deploy-run
 
-# Stop the running binary on the Pi
+# Stop the systemd service on the Pi
 deploy-stop:
-	ssh $(PI_HOST) 'kill $$(cat /tmp/amplipi.pid 2>/dev/null) 2>/dev/null && echo stopped || echo "not running"'
+	ssh $(PI_HOST) 'sudo systemctl stop amplipi.service && echo stopped'
 
-# Tail logs from the Pi
+# Restart the systemd service on the Pi
+deploy-restart:
+	ssh $(PI_HOST) 'sudo systemctl restart amplipi.service && sudo systemctl status amplipi.service --no-pager -l'
+
+# Check status of the systemd service
+deploy-status:
+	ssh $(PI_HOST) 'sudo systemctl status amplipi.service --no-pager -l'
+
+# Tail logs from the systemd journal
 deploy-logs:
-	ssh $(PI_HOST) 'tail -f /tmp/amplipi.log'
+	ssh $(PI_HOST) 'sudo journalctl -u amplipi.service -f'
 
 # ── Go modules ───────────────────────────────────────────────────────────────
 tidy:
