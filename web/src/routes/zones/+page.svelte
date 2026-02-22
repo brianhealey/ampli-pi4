@@ -5,6 +5,8 @@
 	import { filterZonesByGroup } from '$lib/grouping';
 
 	let expandedGroups = $state<Set<number>>(new Set());
+	// Track previous vol_f for each group to calculate deltas
+	let groupVolF = $state<Map<number, number>>(new Map());
 
 	// Filter zones into groups and standalone
 	const enabledZones = $derived(amplipi.zones.filter((z) => !z.disabled));
@@ -18,7 +20,7 @@
 		}
 	}
 
-	async function updateGroup(groupId: number, update: { mute?: boolean; vol_f?: number }) {
+	async function updateGroup(groupId: number, update: { mute?: boolean; vol_delta?: number }) {
 		try {
 			await api.updateGroup(groupId, update);
 		} catch (err) {
@@ -32,6 +34,11 @@
 
 	function percentToVolF(percent: number): number {
 		return percent / 100;
+	}
+
+	// Convert vol_f delta to dB delta (assumes -79 to 0 dB range)
+	function volFDeltaToDbDelta(deltaVolF: number): number {
+		return Math.round(deltaVolF * 79);
 	}
 
 	function toggleGroupExpanded(groupId: number) {
@@ -109,8 +116,17 @@
 								value={volFToPercent(group.vol_f ?? 0)}
 								oninput={(e) => {
 									const percent = parseInt(e.currentTarget.value);
-									const vol_f = percentToVolF(percent);
-									updateGroup(group.id, { vol_f, mute: false });
+									const newVolF = percentToVolF(percent);
+									const oldVolF = groupVolF.get(group.id) ?? group.vol_f ?? 0;
+									const deltaVolF = newVolF - oldVolF;
+									const volDelta = volFDeltaToDbDelta(deltaVolF);
+
+									// Track new vol_f for next delta calculation
+									groupVolF.set(group.id, newVolF);
+
+									if (volDelta !== 0) {
+										updateGroup(group.id, { vol_delta: volDelta, mute: false });
+									}
 								}}
 								class="w-full accent-purple-600"
 							/>
