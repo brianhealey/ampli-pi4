@@ -12,7 +12,10 @@ RUN apk add --no-cache \
     make \
     gcc \
     musl-dev \
-    alsa-lib-dev
+    alsa-lib-dev \
+    libogg-dev \
+    libvorbis-dev \
+    flac-dev
 
 # Clone and build go-librespot
 WORKDIR /build
@@ -29,7 +32,10 @@ FROM alpine:latest
 RUN apk add --no-cache \
     alsa-lib \
     alsa-utils \
-    ca-certificates
+    ca-certificates \
+    libogg \
+    libvorbis \
+    flac-libs
 
 # Copy binary from builder
 COPY --from=builder /build/go-librespot /usr/local/bin/go-librespot
