@@ -19,10 +19,10 @@ services:
         target: /tmp
         tmpfs:
           size: 100M
+    command: ["--mock"]  # Use mock hardware for development
     environment:
       - CONFIG_DIR=/config
       - LOG_LEVEL=debug
-      - HARDWARE_MOCK=true  # Mock hardware for development
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/api/info"]
       interval: 30s
