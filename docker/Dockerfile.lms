@@ -22,7 +22,8 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /build
 RUN git clone https://github.com/ralph-irving/squeezelite.git . && \
     make && \
-    make install DESTDIR=/install
+    mkdir -p /install/usr/local/bin && \
+    cp squeezelite /install/usr/local/bin/squeezelite
 
 # ============================================================================
 # Runtime Stage

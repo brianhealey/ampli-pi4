@@ -20,6 +20,10 @@ RUN apt-get update && apt-get install -y \
     libgnutls28-dev \
     libcurl4-gnutls-dev \
     libasound2-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libavfilter-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Build pianobar
@@ -43,6 +47,10 @@ RUN apt-get update && apt-get install -y \
     libgnutls30 \
     libcurl4 \
     libasound2 \
+    libavcodec59 \
+    libavformat59 \
+    libavutil57 \
+    libavfilter8 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binary from builder
