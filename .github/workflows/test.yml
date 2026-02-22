@@ -1,0 +1,94 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 001-docker-migration
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  # Go unit tests
+  go-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run Go tests
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Generate coverage report
+        run: go tool cover -html=coverage.out -o coverage.html
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.html
+          retention-days: 7
+
+  # Docker Compose smoke test
+  docker-compose-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build all images
+        run: |
+          docker compose -f docker/docker-compose.yml build
+
+      - name: Start services
+        run: |
+          docker compose -f docker/docker-compose.yml up -d
+        env:
+          HARDWARE_MOCK: true
+
+      - name: Wait for services to be ready
+        run: |
+          echo "Waiting for amplipi service to be healthy..."
+          timeout 60 bash -c 'until docker compose -f docker/docker-compose.yml ps | grep -q "healthy"; do sleep 2; done' || {
+            echo "Service failed to become healthy"
+            docker compose -f docker/docker-compose.yml ps
+            docker compose -f docker/docker-compose.yml logs
+            exit 1
+          }
+
+      - name: Test API endpoint
+        run: |
+          curl -f http://localhost/api/info || {
+            echo "API endpoint test failed"
+            docker compose -f docker/docker-compose.yml logs amplipi
+            exit 1
+          }
+
+      - name: Show container status
+        if: always()
+        run: docker compose -f docker/docker-compose.yml ps
+
+      - name: Show logs
+        if: always()
+        run: docker compose -f docker/docker-compose.yml logs
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v

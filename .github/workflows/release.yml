@@ -1,0 +1,212 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version_num=${VERSION#v}" >> $GITHUB_OUTPUT
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build and push all images with version tags
+      - name: Build and push amplipi
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.amplipi
+          platforms: linux/arm64,linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi:latest
+          cache-from: type=gha,scope=amplipi
+          cache-to: type=gha,mode=max,scope=amplipi
+
+      - name: Build and push amplipi-display
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.display
+          platforms: linux/arm64,linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi-display:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi-display:latest
+          cache-from: type=gha,scope=amplipi-display
+          cache-to: type=gha,mode=max,scope=amplipi-display
+
+      - name: Build and push amplipi-airplay
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.airplay
+          platforms: linux/arm64,linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi-airplay:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi-airplay:latest
+          cache-from: type=gha,scope=amplipi-airplay
+          cache-to: type=gha,mode=max,scope=amplipi-airplay
+
+      - name: Build and push amplipi-spotify
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.spotify
+          platforms: linux/arm64,linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi-spotify:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi-spotify:latest
+          cache-from: type=gha,scope=amplipi-spotify
+          cache-to: type=gha,mode=max,scope=amplipi-spotify
+
+      - name: Build and push amplipi-pandora
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.pandora
+          platforms: linux/arm64,linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi-pandora:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi-pandora:latest
+          cache-from: type=gha,scope=amplipi-pandora
+          cache-to: type=gha,mode=max,scope=amplipi-pandora
+
+      - name: Build and push amplipi-lms
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.lms
+          platforms: linux/arm64,linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi-lms:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi-lms:latest
+          cache-from: type=gha,scope=amplipi-lms
+          cache-to: type=gha,mode=max,scope=amplipi-lms
+
+      - name: Build and push amplipi-dlna
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.dlna
+          platforms: linux/arm64,linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi-dlna:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/amplipi-dlna:latest
+          cache-from: type=gha,scope=amplipi-dlna
+          cache-to: type=gha,mode=max,scope=amplipi-dlna
+
+      - name: Generate release manifest
+        run: |
+          chmod +x scripts/generate-manifest.sh
+          ./scripts/generate-manifest.sh ${{ steps.version.outputs.version }} ${{ env.REGISTRY }} ${{ env.IMAGE_PREFIX }}
+
+      - name: Bundle deployment files
+        run: |
+          mkdir -p release-assets
+          cp manifest.yml release-assets/
+          cp deployments/docker-compose.prod.yml release-assets/
+          cp deployments/.env.example release-assets/
+          cp -r scripts release-assets/
+
+      - name: Create release archive
+        run: |
+          cd release-assets
+          tar czf ../amplipi-docker-${{ steps.version.outputs.version }}.tar.gz *
+          cd ..
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat > release-notes.md <<'EOF'
+          # AmpliPi Docker Release ${{ steps.version.outputs.version }}
+
+          ## Container Images
+
+          All images are available at `${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}`:
+
+          - `amplipi:${{ steps.version.outputs.version }}`
+          - `amplipi-display:${{ steps.version.outputs.version }}`
+          - `amplipi-airplay:${{ steps.version.outputs.version }}`
+          - `amplipi-spotify:${{ steps.version.outputs.version }}`
+          - `amplipi-pandora:${{ steps.version.outputs.version }}`
+          - `amplipi-lms:${{ steps.version.outputs.version }}`
+          - `amplipi-dlna:${{ steps.version.outputs.version }}`
+
+          ## Quick Start
+
+          ```bash
+          # Download release assets
+          curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/amplipi-docker-${{ steps.version.outputs.version }}.tar.gz
+
+          # Extract
+          tar xzf amplipi-docker-${{ steps.version.outputs.version }}.tar.gz
+
+          # Deploy to Pi
+          scp -r * pi@amplipi.local:/home/pi/amplipi-docker/
+          ssh pi@amplipi.local 'cd /home/pi/amplipi-docker && sudo docker compose -f docker-compose.prod.yml pull && sudo docker compose -f docker-compose.prod.yml up -d'
+          ```
+
+          ## Release Manifest
+
+          This release includes a `manifest.yml` file for automated updates via the web interface.
+
+          ## Documentation
+
+          - [Deployment Guide](https://github.com/${{ github.repository }}/blob/main/amplipi-go/docs/deployment.md)
+          - [Quick Start](https://github.com/${{ github.repository }}/blob/main/specs/001-docker-migration/quickstart.md)
+
+          ## Platform Support
+
+          - ✅ ARM64 (Raspberry Pi CM4S)
+          - ✅ AMD64 (Development/Testing)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release-assets/manifest.yml
+            release-assets/docker-compose.prod.yml
+            release-assets/.env.example
+            amplipi-docker-${{ steps.version.outputs.version }}.tar.gz
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: true
