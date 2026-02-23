@@ -33,7 +33,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	store := config.NewMemStore()
 	bus := events.NewBus()
 
-	ctrl, err := controller.New(hw, nil, store, bus, nil)
+	ctrl, err := controller.New(hw, nil, store, bus, nil, nil)
 	if err != nil {
 		t.Fatalf("controller.New: %v", err)
 	}

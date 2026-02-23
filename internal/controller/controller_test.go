@@ -43,7 +43,7 @@ func newTestController(t *testing.T) *controller.Controller {
 	hw := hardware.NewMock()
 	store := newMemStore()
 	bus := events.NewBus()
-	ctrl, err := controller.New(hw, nil, store, bus, nil)
+	ctrl, err := controller.New(hw, nil, store, bus, nil, nil)
 	if err != nil {
 		t.Fatalf("failed to create controller: %v", err)
 	}

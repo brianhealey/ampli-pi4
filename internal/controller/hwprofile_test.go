@@ -20,7 +20,7 @@ func newProfiledController(t *testing.T, p *hardware.HardwareProfile) *controlle
 	hw := hardware.NewMock()
 	store := config.NewMemStore()
 	bus := events.NewBus()
-	ctrl, err := controller.New(hw, p, store, bus, nil)
+	ctrl, err := controller.New(hw, p, store, bus, nil, nil)
 	if err != nil {
 		t.Fatalf("controller.New: %v", err)
 	}
