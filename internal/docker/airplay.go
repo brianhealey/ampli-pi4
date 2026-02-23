@@ -166,7 +166,7 @@ func (m *AirPlayManager) UpdateContainer(ctx context.Context, streamID int, newN
 
 	// Extract ALSA device from environment
 	alsaDevice := ""
-	for _, env := range inspect.Config.Env {
+	for _, env := range inspect.Container.Config.Env {
 		if len(env) > 12 && env[:12] == "ALSA_DEVICE=" {
 			alsaDevice = env[12:]
 			break
