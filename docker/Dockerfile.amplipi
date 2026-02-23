@@ -44,13 +44,14 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-arm64} \
 # ============================================================================
 FROM alpine:latest
 
-# Install runtime dependencies
+# Install runtime dependencies (including libcap for setcap)
 RUN apk add --no-cache \
     ca-certificates \
     curl \
     i2c-tools \
     alsa-utils \
-    tzdata
+    tzdata \
+    libcap
 
 # Create non-root user
 RUN addgroup -g 1000 amplipi && \
@@ -62,6 +63,9 @@ RUN mkdir -p /config /logs && \
 
 # Copy binary from builder (includes embedded web assets)
 COPY --from=builder /build/amplipi /usr/local/bin/amplipi
+
+# Grant NET_BIND_SERVICE capability to binary for non-root port 80 binding
+RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/amplipi
 
 # Set working directory
 WORKDIR /app
