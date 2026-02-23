@@ -85,5 +85,5 @@ ENV CONFIG_DIR=/config \
     LOG_LEVEL=info \
     HARDWARE_MOCK=false
 
-# Entry point
-ENTRYPOINT ["/usr/local/bin/amplipi"]
+# Entry point (use --config-dir to override default ~/.config/amplipi)
+ENTRYPOINT ["/usr/local/bin/amplipi", "--config-dir=/config"]
