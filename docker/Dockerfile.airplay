@@ -95,8 +95,12 @@ COPY <<'EOF' /usr/local/bin/start-airplay.sh
 #!/bin/sh
 set -e
 
+# Start dbus (required by avahi)
+mkdir -p /var/run/dbus
+rm -f /var/run/dbus/pid
+dbus-daemon --system --fork
+
 # Start avahi-daemon for mDNS advertisement
-# (dbus socket is mounted from host at /var/run/dbus)
 avahi-daemon --daemonize --no-chroot
 
 # Wait for avahi to be ready
