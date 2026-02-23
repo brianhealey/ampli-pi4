@@ -198,9 +198,9 @@ services:
 
 volumes:
   amplipi-config:
-    driver: local
+    external: true
   amplipi-logs:
-    driver: local
+    external: true
 
 networks:
   # Macvlan network for AirPlay2 instances (separate IPs)
