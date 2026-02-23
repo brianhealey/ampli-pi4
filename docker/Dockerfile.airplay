@@ -95,6 +95,13 @@ COPY <<'EOF' /usr/local/bin/start-airplay.sh
 #!/bin/sh
 set -e
 
+# Start avahi-daemon for mDNS advertisement
+# (dbus socket is mounted from host at /var/run/dbus)
+avahi-daemon --daemonize --no-chroot
+
+# Wait for avahi to be ready
+sleep 2
+
 # Start nqptp for AirPlay 2 PTP
 nqptp &
 
@@ -116,7 +123,7 @@ alsa = {
 
 sessioncontrol = {
     allow_session_interruption = "yes";
-    session_timeout = 20;
+    session_timeout = 60;
 };
 CONFIG
 

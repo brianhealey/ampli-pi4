@@ -72,6 +72,8 @@ services:
       amplipi-internal:
     devices:
       - /dev/snd:/dev/snd
+    volumes:
+      - /var/run/dbus:/var/run/dbus:ro
     group_add:
       - "29"   # audio group (for /dev/snd)
     environment:
@@ -91,6 +93,8 @@ services:
       amplipi-internal:
     devices:
       - /dev/snd:/dev/snd
+    volumes:
+      - /var/run/dbus:/var/run/dbus:ro
     group_add:
       - "29"   # audio group (for /dev/snd)
     environment:
@@ -110,6 +114,8 @@ services:
       amplipi-internal:
     devices:
       - /dev/snd:/dev/snd
+    volumes:
+      - /var/run/dbus:/var/run/dbus:ro
     group_add:
       - "29"   # audio group (for /dev/snd)
     environment:
@@ -129,6 +135,8 @@ services:
       amplipi-internal:
     devices:
       - /dev/snd:/dev/snd
+    volumes:
+      - /var/run/dbus:/var/run/dbus:ro
     group_add:
       - "29"   # audio group (for /dev/snd)
     environment:
