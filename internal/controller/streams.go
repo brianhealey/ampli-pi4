@@ -38,7 +38,10 @@ func (c *Controller) CreateStream(ctx context.Context, req models.StreamCreate) 
 	}
 
 	// Reject stream types whose binary isn't installed on this hardware
-	if c.profile != nil && !c.profile.StreamAvailable(req.Type) {
+	// Exception: airplay streams are always available when dynamic manager is present
+	if req.Type == "airplay" && c.airplayMgr != nil {
+		// AirPlay is managed via dynamic containers, hardware profile check not needed
+	} else if c.profile != nil && !c.profile.StreamAvailable(req.Type) {
 		return models.State{}, models.ErrBadRequest(
 			fmt.Sprintf("stream type %q is not available on this hardware", req.Type))
 	}
