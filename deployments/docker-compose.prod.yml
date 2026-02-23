@@ -66,6 +66,17 @@ services:
       - DISPLAY_TYPE=${DISPLAY_TYPE:-tft}
       - REFRESH_INTERVAL=1000
 
+  # Network initialization - ensures networks exist for dynamic containers
+  # This service exits immediately but forces Docker Compose to create the networks
+  network-init:
+    image: busybox:latest
+    container_name: amplipi-network-init
+    command: /bin/true
+    restart: "no"
+    networks:
+      - amplipi-macvlan
+      - amplipi-internal
+
   # Note: AirPlay2 containers are dynamically managed by the amplipi container
   # They are created/destroyed automatically based on stream configuration
   # See internal/docker package for implementation
