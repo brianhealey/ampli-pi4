@@ -20,6 +20,10 @@ services:
         target: /tmp
         tmpfs:
           size: 100M
+    group_add:
+      - "986"  # gpio group (for /dev/gpiochip0)
+      - "988"  # i2c group (for /dev/i2c-1)
+      - "29"   # audio group (for /dev/snd)
     environment:
       - CONFIG_DIR=/config
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -40,6 +44,9 @@ services:
     devices:
       - /dev/spidev0.0:/dev/spidev0.0   # SPI for TFT display
       - /dev/gpiochip0:/dev/gpiochip0   # GPIO for display control
+    group_add:
+      - "986"  # gpio group (for /dev/gpiochip0)
+      - "997"  # spi group (for /dev/spidev0.0)
     depends_on:
       amplipi:
         condition: service_healthy
@@ -60,6 +67,8 @@ services:
       amplipi-internal:
     devices:
       - /dev/snd:/dev/snd
+    group_add:
+      - "29"   # audio group (for /dev/snd)
     environment:
       - AIRPLAY_NAME=AmpliPi Source 1
       - ALSA_DEVICE=lb0c
@@ -77,6 +86,8 @@ services:
       amplipi-internal:
     devices:
       - /dev/snd:/dev/snd
+    group_add:
+      - "29"   # audio group (for /dev/snd)
     environment:
       - AIRPLAY_NAME=AmpliPi Source 2
       - ALSA_DEVICE=lb1c
@@ -94,6 +105,8 @@ services:
       amplipi-internal:
     devices:
       - /dev/snd:/dev/snd
+    group_add:
+      - "29"   # audio group (for /dev/snd)
     environment:
       - AIRPLAY_NAME=AmpliPi Source 3
       - ALSA_DEVICE=lb2c
@@ -111,6 +124,8 @@ services:
       amplipi-internal:
     devices:
       - /dev/snd:/dev/snd
+    group_add:
+      - "29"   # audio group (for /dev/snd)
     environment:
       - AIRPLAY_NAME=AmpliPi Source 4
       - ALSA_DEVICE=lb3c
