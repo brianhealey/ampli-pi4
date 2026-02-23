@@ -6,6 +6,10 @@
 # ============================================================================
 FROM golang:1.26-alpine AS builder
 
+# Declare build arguments for multi-arch support
+ARG TARGETARCH
+ARG TARGETOS
+
 # Install build dependencies
 RUN apk add --no-cache \
     git \
@@ -26,7 +30,7 @@ RUN go mod download
 COPY . .
 
 # Build the display driver
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-arm64} \
     go build \
     -ldflags="-w -s" \
     -o amplipi-display \
