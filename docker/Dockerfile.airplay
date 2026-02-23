@@ -59,7 +59,7 @@ RUN git clone --branch master https://github.com/mikebrady/shairport-sync.git . 
 # ============================================================================
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
+# Install runtime dependencies (including inotify-tools for config watching)
 RUN apt-get update && apt-get install -y \
     alsa-utils \
     avahi-daemon \
@@ -76,6 +76,8 @@ RUN apt-get update && apt-get install -y \
     libavformat59 \
     libavutil57 \
     dbus \
+    inotify-tools \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binaries from builder
@@ -92,8 +94,49 @@ RUN mkdir -p /etc/shairport-sync
 
 # Create startup script
 COPY <<'EOF' /usr/local/bin/start-airplay.sh
-#!/bin/sh
+#!/bin/bash
 set -e
+
+# Function to get AirPlay name from config or fallback to env var
+get_airplay_name() {
+    local name="${AIRPLAY_NAME:-AmpliPi}"
+
+    # Try to read from stream config if STREAM_ID is set
+    if [ -n "$STREAM_ID" ]; then
+        # Check for house.json with stream info
+        if [ -f "/config/house.json" ]; then
+            # Extract stream name for this STREAM_ID using jq
+            local json_name=$(jq -r ".streams[] | select(.id == $STREAM_ID) | .name" /config/house.json 2>/dev/null)
+            if [ -n "$json_name" ] && [ "$json_name" != "null" ]; then
+                name="$json_name"
+            fi
+        fi
+    fi
+
+    echo "$name"
+}
+
+# Function to generate shairport-sync config
+generate_config() {
+    local name=$(get_airplay_name)
+    cat > /etc/shairport-sync/shairport-sync.conf <<CONFIG
+general = {
+    name = "$name";
+    interpolation = "soxr";
+    output_backend = "alsa";
+};
+
+alsa = {
+    output_device = "${ALSA_DEVICE:-default}";
+    mixer_control_name = "PCM";
+};
+
+sessioncontrol = {
+    allow_session_interruption = "yes";
+    session_timeout = 60;
+};
+CONFIG
+}
 
 # Start dbus (required by avahi)
 mkdir -p /var/run/dbus
@@ -112,26 +155,31 @@ nqptp &
 # Wait for nqptp to initialize
 sleep 2
 
-# Generate shairport-sync configuration
-cat > /etc/shairport-sync/shairport-sync.conf <<CONFIG
-general = {
-    name = "${AIRPLAY_NAME:-AmpliPi}";
-    interpolation = "soxr";
-    output_backend = "alsa";
-};
+# Generate initial shairport-sync configuration
+generate_config
 
-alsa = {
-    output_device = "${ALSA_DEVICE:-default}";
-    mixer_control_name = "PCM";
-};
+# Start config file watcher in background (monitors house.json for changes)
+if [ -f "/config/house.json" ]; then
+    (
+        while true; do
+            inotifywait -e modify,close_write /config/house.json 2>/dev/null
+            echo "Config changed, regenerating shairport-sync config and restarting..."
+            OLD_NAME=$(grep 'name = ' /etc/shairport-sync/shairport-sync.conf | cut -d'"' -f2)
+            generate_config
+            NEW_NAME=$(grep 'name = ' /etc/shairport-sync/shairport-sync.conf | cut -d'"' -f2)
 
-sessioncontrol = {
-    allow_session_interruption = "yes";
-    session_timeout = 60;
-};
-CONFIG
+            # Only restart if name actually changed
+            if [ "$OLD_NAME" != "$NEW_NAME" ]; then
+                echo "Name changed from '$OLD_NAME' to '$NEW_NAME', restarting shairport-sync..."
+                pkill -TERM shairport-sync || true
+                sleep 2
+                shairport-sync -c /etc/shairport-sync/shairport-sync.conf &
+            fi
+        done
+    ) &
+fi
 
-# Start shairport-sync
+# Start shairport-sync in foreground
 exec shairport-sync -c /etc/shairport-sync/shairport-sync.conf
 EOF
 

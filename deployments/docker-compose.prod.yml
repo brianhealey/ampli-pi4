@@ -72,10 +72,13 @@ services:
       amplipi-internal:
     devices:
       - /dev/snd:/dev/snd
+    volumes:
+      - amplipi-config:/config:ro
     group_add:
       - "29"   # audio group (for /dev/snd)
     environment:
-      - AIRPLAY_NAME=AmpliPi Source 1
+      - STREAM_ID=1000
+      - AIRPLAY_NAME=AmpliPi Source 1  # Fallback if config file doesn't exist
       - ALSA_DEVICE=lb0c
       - AIRPLAY2_ENABLED=true
 
@@ -91,10 +94,13 @@ services:
       amplipi-internal:
     devices:
       - /dev/snd:/dev/snd
+    volumes:
+      - amplipi-config:/config:ro
     group_add:
       - "29"   # audio group (for /dev/snd)
     environment:
-      - AIRPLAY_NAME=AmpliPi Source 2
+      - STREAM_ID=1001
+      - AIRPLAY_NAME=AmpliPi Source 2  # Fallback if config file doesn't exist
       - ALSA_DEVICE=lb1c
       - AIRPLAY2_ENABLED=true
 
@@ -110,10 +116,13 @@ services:
       amplipi-internal:
     devices:
       - /dev/snd:/dev/snd
+    volumes:
+      - amplipi-config:/config:ro
     group_add:
       - "29"   # audio group (for /dev/snd)
     environment:
-      - AIRPLAY_NAME=AmpliPi Source 3
+      - STREAM_ID=1002
+      - AIRPLAY_NAME=AmpliPi Source 3  # Fallback if config file doesn't exist
       - ALSA_DEVICE=lb2c
       - AIRPLAY2_ENABLED=true
 
@@ -129,10 +138,13 @@ services:
       amplipi-internal:
     devices:
       - /dev/snd:/dev/snd
+    volumes:
+      - amplipi-config:/config:ro
     group_add:
       - "29"   # audio group (for /dev/snd)
     environment:
-      - AIRPLAY_NAME=AmpliPi Source 4
+      - STREAM_ID=1003
+      - AIRPLAY_NAME=AmpliPi Source 4  # Fallback if config file doesn't exist
       - ALSA_DEVICE=lb3c
       - AIRPLAY2_ENABLED=true
 
