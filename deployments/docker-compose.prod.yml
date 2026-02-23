@@ -27,6 +27,8 @@ services:
       - "988"  # i2c group (for /dev/i2c-1)
       - "29"   # audio group (for /dev/snd)
       - "20"   # dialout group (for /dev/ttyAMA0)
+    cap_add:
+      - NET_BIND_SERVICE  # Allow binding to ports <1024 (port 80)
     environment:
       - CONFIG_DIR=/config
       - LOG_LEVEL=${LOG_LEVEL:-info}
