@@ -153,19 +153,38 @@ func (m *AirPlayManager) RemoveContainer(ctx context.Context, streamID int) erro
 }
 
 // UpdateContainer updates an existing container's configuration (name change)
+// Since the name is passed via environment variable, we need to recreate the container
 func (m *AirPlayManager) UpdateContainer(ctx context.Context, streamID int, newName string) error {
 	containerName := fmt.Sprintf("airplay-%d", streamID)
 
-	// For name updates, the config watcher inside the container will handle this automatically
-	// Just verify the container exists
+	// Get current container to preserve ALSA device assignment
 	inspectOpts := client.ContainerInspectOptions{}
-	_, err := m.cli.ContainerInspect(ctx, containerName, inspectOpts)
+	inspect, err := m.cli.ContainerInspect(ctx, containerName, inspectOpts)
 	if err != nil {
 		return fmt.Errorf("container %s not found: %w", containerName, err)
 	}
 
-	// The container's inotifywait process will detect the config change and reload automatically
-	return nil
+	// Extract ALSA device from environment
+	alsaDevice := ""
+	for _, env := range inspect.Config.Env {
+		if len(env) > 12 && env[:12] == "ALSA_DEVICE=" {
+			alsaDevice = env[12:]
+			break
+		}
+	}
+	if alsaDevice == "" {
+		// Fallback to calculating from stream ID
+		alsaDevice = fmt.Sprintf("lb%dc", streamID%8)
+	}
+
+	// Remove old container
+	if err := m.RemoveContainer(ctx, streamID); err != nil {
+		return fmt.Errorf("failed to remove old container: %w", err)
+	}
+
+	// Create new container with updated name
+	_, err = m.CreateContainer(ctx, streamID, newName, alsaDevice)
+	return err
 }
 
 // ListContainers returns all AirPlay containers managed by this instance
