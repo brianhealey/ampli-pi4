@@ -12,6 +12,7 @@ services:
       - /dev/i2c-1:/dev/i2c-1           # I2C hardware access
       - /dev/gpiochip0:/dev/gpiochip0   # GPIO for STM32 reset
       - /dev/snd:/dev/snd               # ALSA devices (loopback)
+      - /dev/ttyAMA0:/dev/ttyAMA0       # UART for STM32 address assignment
     volumes:
       - amplipi-config:/config
       - amplipi-logs:/logs
@@ -24,6 +25,7 @@ services:
       - "986"  # gpio group (for /dev/gpiochip0)
       - "988"  # i2c group (for /dev/i2c-1)
       - "29"   # audio group (for /dev/snd)
+      - "20"   # dialout group (for /dev/ttyAMA0)
     environment:
       - CONFIG_DIR=/config
       - LOG_LEVEL=${LOG_LEVEL:-info}
