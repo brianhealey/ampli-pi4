@@ -34,6 +34,11 @@ services:
       - CONFIG_DIR=/config
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - HARDWARE_MOCK=${HARDWARE_MOCK:-false}
+      - AIRPLAY_IMAGE=${AIRPLAY_IMAGE:-ghcr.io/brianhealey/amplipi-airplay:latest}
+      - MACVLAN_NETWORK=${MACVLAN_NETWORK:-amplipi-macvlan}
+      - INTERNAL_NETWORK=${INTERNAL_NETWORK:-amplipi-internal}
+      - CONFIG_VOLUME=${CONFIG_VOLUME:-amplipi-config}
+      - AIRPLAY_IP_START=${AIRPLAY_IP_START:-10.100.10.98}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/api/info"]
       interval: 30s
