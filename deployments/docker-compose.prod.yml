@@ -13,6 +13,7 @@ services:
       - /dev/gpiochip0:/dev/gpiochip0   # GPIO for STM32 reset
       - /dev/snd:/dev/snd               # ALSA devices (loopback)
       - /dev/ttyAMA0:/dev/ttyAMA0       # UART for STM32 address assignment
+      - /dev/ttyAMA0:/dev/serial0       # Symlink target for code expecting /dev/serial0
     volumes:
       - amplipi-config:/config
       - amplipi-logs:/logs
