@@ -139,6 +139,7 @@ volumes:
 networks:
   # Macvlan network for AirPlay2 instances (separate IPs)
   amplipi-macvlan:
+    name: amplipi-macvlan
     driver: macvlan
     driver_opts:
       parent: ${MACVLAN_PARENT:-eth0}
@@ -151,4 +152,5 @@ networks:
 
   # Internal bridge network for inter-container communication
   amplipi-internal:
+    name: amplipi-internal
     driver: bridge
