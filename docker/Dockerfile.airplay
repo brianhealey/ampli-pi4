@@ -177,10 +177,18 @@ if [ -f "/config/house.json" ]; then
             fi
         done
     ) &
+    WATCHER_PID=$!
 fi
 
-# Start shairport-sync in foreground
-exec shairport-sync -c /etc/shairport-sync/shairport-sync.conf
+# Trap TERM and INT signals to gracefully shutdown
+trap 'echo "Shutting down..."; kill $WATCHER_PID 2>/dev/null; pkill shairport-sync; exit 0' TERM INT
+
+# Start shairport-sync in foreground (don't use exec so the shell stays alive)
+shairport-sync -c /etc/shairport-sync/shairport-sync.conf &
+SHAIRPORT_PID=$!
+
+# Wait for shairport-sync to exit
+wait $SHAIRPORT_PID
 EOF
 
 RUN chmod +x /usr/local/bin/start-airplay.sh
