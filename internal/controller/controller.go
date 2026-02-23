@@ -4,6 +4,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/micro-nova/amplipi-go/internal/config"
@@ -67,6 +68,20 @@ func New(hw hardware.Driver, profile *hardware.HardwareProfile, store config.Sto
 		if err := c.streams.Sync(ctx, state.Streams, state.Sources); err != nil {
 			// Not fatal — log and continue
 			_ = err
+		}
+	}
+
+	// Create containers for existing AirPlay streams if dynamic manager is available
+	if c.airplayMgr != nil {
+		for _, stream := range state.Streams {
+			if stream.Type == "airplay" {
+				// Calculate ALSA device based on stream ID
+				alsaDevice := fmt.Sprintf("lb%dc", stream.ID%8)
+				if _, err := c.airplayMgr.CreateContainer(ctx, stream.ID, stream.Name, alsaDevice); err != nil {
+					// Log error but don't fail startup - container can be recreated later
+					_ = err
+				}
+			}
 		}
 	}
 
