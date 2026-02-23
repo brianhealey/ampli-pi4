@@ -29,7 +29,7 @@ func (c *Controller) GetStream(id int) (*models.Stream, *models.AppError) {
 }
 
 // CreateStream creates a new stream and returns the updated state.
-func (c *Controller) CreateStream(_ context.Context, req models.StreamCreate) (models.State, *models.AppError) {
+func (c *Controller) CreateStream(ctx context.Context, req models.StreamCreate) (models.State, *models.AppError) {
 	if req.Name == "" {
 		return models.State{}, models.ErrBadRequest("stream name is required")
 	}
@@ -43,9 +43,10 @@ func (c *Controller) CreateStream(_ context.Context, req models.StreamCreate) (m
 			fmt.Sprintf("stream type %q is not available on this hardware", req.Type))
 	}
 
+	var newStream models.Stream
 	state, err := c.apply(func(s *models.State) error {
 		f := false
-		stream := models.Stream{
+		newStream = models.Stream{
 			ID:        nextStreamID(s),
 			Name:      req.Name,
 			Type:      req.Type,
@@ -53,7 +54,7 @@ func (c *Controller) CreateStream(_ context.Context, req models.StreamCreate) (m
 			Disabled:  &f,
 			Browsable: &f,
 		}
-		s.Streams = append(s.Streams, stream)
+		s.Streams = append(s.Streams, newStream)
 		return nil
 	})
 	if err != nil {
@@ -62,11 +63,31 @@ func (c *Controller) CreateStream(_ context.Context, req models.StreamCreate) (m
 		}
 		return models.State{}, models.ErrInternal(err.Error())
 	}
+
+	// If this is an AirPlay stream and dynamic manager is available, spawn container
+	if req.Type == "airplay" && c.airplayMgr != nil {
+		// Calculate ALSA device based on stream ID (lb0c, lb1c, lb2c, etc.)
+		alsaDevice := fmt.Sprintf("lb%dc", newStream.ID % 8) // Use loopback devices 0-7
+		if _, err := c.airplayMgr.CreateContainer(ctx, newStream.ID, newStream.Name, alsaDevice); err != nil {
+			// Container creation failed - roll back the stream creation
+			c.DeleteStream(ctx, newStream.ID)
+			return models.State{}, models.ErrInternal(fmt.Sprintf("failed to create AirPlay container: %v", err))
+		}
+	}
+
 	return state, nil
 }
 
 // SetStream updates a stream by ID.
-func (c *Controller) SetStream(_ context.Context, id int, upd models.StreamUpdate) (models.State, *models.AppError) {
+func (c *Controller) SetStream(ctx context.Context, id int, upd models.StreamUpdate) (models.State, *models.AppError) {
+	// Check if it's an AirPlay stream and if name is being updated
+	c.mu.RLock()
+	stream := findStream(&c.state, id)
+	isAirPlay := stream != nil && stream.Type == "airplay"
+	c.mu.RUnlock()
+
+	nameChanged := upd.Name != nil && isAirPlay
+
 	state, err := c.apply(func(s *models.State) error {
 		stream := findStream(s, id)
 		if stream == nil {
@@ -91,11 +112,28 @@ func (c *Controller) SetStream(_ context.Context, id int, upd models.StreamUpdat
 		}
 		return models.State{}, models.ErrInternal(err.Error())
 	}
+
+	// If this is an AirPlay stream and name changed, update container
+	// The container's inotifywait will detect the config change automatically
+	if nameChanged && c.airplayMgr != nil {
+		if err := c.airplayMgr.UpdateContainer(ctx, id, *upd.Name); err != nil {
+			// Log error but don't fail - name is already updated in state
+			// The container will eventually sync when config file is written
+			_ = err
+		}
+	}
+
 	return state, nil
 }
 
 // DeleteStream removes a stream by ID.
-func (c *Controller) DeleteStream(_ context.Context, id int) (models.State, *models.AppError) {
+func (c *Controller) DeleteStream(ctx context.Context, id int) (models.State, *models.AppError) {
+	// Check if it's an AirPlay stream before deletion
+	c.mu.RLock()
+	stream := findStream(&c.state, id)
+	isAirPlay := stream != nil && stream.Type == "airplay"
+	c.mu.RUnlock()
+
 	state, err := c.apply(func(s *models.State) error {
 		for i, st := range s.Streams {
 			if st.ID == id {
@@ -111,6 +149,15 @@ func (c *Controller) DeleteStream(_ context.Context, id int) (models.State, *mod
 		}
 		return models.State{}, models.ErrInternal(err.Error())
 	}
+
+	// If this was an AirPlay stream and dynamic manager is available, remove container
+	if isAirPlay && c.airplayMgr != nil {
+		if err := c.airplayMgr.RemoveContainer(ctx, id); err != nil {
+			// Log error but don't fail - stream is already deleted from state
+			_ = err
+		}
+	}
+
 	return state, nil
 }
 

@@ -183,31 +183,55 @@
 				<!-- Stream info -->
 				{#if stream.info}
 					<div class="mb-3 rounded-lg bg-gray-50 p-3 dark:bg-gray-700/50">
-						{#if stream.info.state}
-							<div class="mb-1 flex items-center justify-between">
-								<span class="text-xs font-medium text-gray-700 dark:text-gray-300">Status</span>
-								<span class="text-xs {getStatusColor(stream.info.state)}">
-									{stream.info.state}
-								</span>
+						<div class="flex gap-3">
+							<!-- Album Art -->
+							{#if stream.info.img_url}
+								<img
+									src={stream.info.img_url}
+									alt="{stream.info.track || 'Album'} art"
+									class="h-20 w-20 flex-shrink-0 rounded object-cover"
+									onerror={(e) => (e.currentTarget.style.display = 'none')}
+								/>
+							{/if}
+
+							<div class="flex-1">
+								{#if stream.info.state}
+									<div class="mb-1 flex items-center justify-between">
+										<span class="text-xs font-medium text-gray-700 dark:text-gray-300">Status</span>
+										<span class="text-xs {getStatusColor(stream.info.state)}">
+											{stream.info.state}
+										</span>
+									</div>
+								{/if}
+
+								{#if stream.info.track}
+									<p class="mb-1 text-sm font-medium text-gray-900 dark:text-white">
+										{stream.info.track}
+									</p>
+								{/if}
+
+								{#if stream.info.artist}
+									<p class="text-xs text-gray-600 dark:text-gray-400">
+										{stream.info.artist}
+										{#if stream.info.album} • {stream.info.album}{/if}
+									</p>
+								{/if}
+
+								{#if stream.info.station}
+									<p class="text-xs text-gray-600 dark:text-gray-400">{stream.info.station}</p>
+								{/if}
+
+								{#if stream.info.rating !== undefined && stream.info.rating !== null}
+									<div class="mt-1 flex items-center gap-0.5 text-sm">
+										{#each Array(5) as _, i}
+											<span class="text-yellow-500">
+												{i < stream.info.rating ? '★' : '☆'}
+											</span>
+										{/each}
+									</div>
+								{/if}
 							</div>
-						{/if}
-
-						{#if stream.info.track}
-							<p class="mb-1 text-sm font-medium text-gray-900 dark:text-white">
-								{stream.info.track}
-							</p>
-						{/if}
-
-						{#if stream.info.artist}
-							<p class="text-xs text-gray-600 dark:text-gray-400">
-								{stream.info.artist}
-								{#if stream.info.album} • {stream.info.album}{/if}
-							</p>
-						{/if}
-
-						{#if stream.info.station}
-							<p class="text-xs text-gray-600 dark:text-gray-400">{stream.info.station}</p>
-						{/if}
+						</div>
 					</div>
 				{/if}
 

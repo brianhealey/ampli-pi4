@@ -66,18 +66,22 @@ run_lib() {
 }
 
 # ── Run scripts in order ─────────────────────────────────────────────────────
+run_lib "05-docker.sh"
 run_lib "10-system.sh"
 run_lib "20-hardware.sh"
 run_lib "30-alsa.sh"
 run_lib "40-deps.sh"
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
-    run_lib "50-shairport-sync.sh"
-    run_lib "51-squeezelite.sh"
-    run_lib "52-pianobar.sh"
-    run_lib "53-gmrender.sh"
-    run_lib "54-go-librespot.sh"
-    run_lib "55-bluealsa.sh"
+    # NOTE: Streaming services now run in Docker containers
+    # Commenting out to avoid conflicts during Docker migration
+    # run_lib "50-shairport-sync.sh"
+    # run_lib "51-squeezelite.sh"
+    # run_lib "52-pianobar.sh"
+    # run_lib "53-gmrender.sh"
+    # run_lib "54-go-librespot.sh"
+    # run_lib "55-bluealsa.sh"
+    log "Streaming services will run in Docker containers - skipping bare-metal builds"
 else
     warn "Skipping build scripts 50-55 (--skip-build)"
 fi
@@ -85,7 +89,10 @@ fi
 run_lib "60-configs.sh"
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
-    run_lib "70-amplipi.sh"
+    # NOTE: AmpliPi binary now runs in Docker container
+    # Commenting out to avoid conflicts during Docker migration
+    # run_lib "70-amplipi.sh"
+    log "AmpliPi binary will run in Docker container - skipping bare-metal build"
 else
     warn "Skipping build script 70 (--skip-build)"
 fi

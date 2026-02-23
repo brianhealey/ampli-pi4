@@ -16,33 +16,43 @@ import (
 // Controller is the central state machine for AmpliPi.
 // All state mutations go through the apply() method which ensures
 // atomicity, persistence, and event publishing.
+// AirPlayManager defines the interface for dynamic AirPlay container management
+type AirPlayManager interface {
+	CreateContainer(ctx context.Context, streamID int, streamName, alsaDevice string) (string, error)
+	RemoveContainer(ctx context.Context, streamID int) error
+	UpdateContainer(ctx context.Context, streamID int, newName string) error
+}
+
 type Controller struct {
-	mu      sync.RWMutex
-	state   models.State
-	hw      hardware.Driver
-	profile *hardware.HardwareProfile // may be nil (no capability restrictions)
-	store   config.Store
-	bus     *events.Bus
-	streams *streams.Manager
+	mu         sync.RWMutex
+	state      models.State
+	hw         hardware.Driver
+	profile    *hardware.HardwareProfile // may be nil (no capability restrictions)
+	store      config.Store
+	bus        *events.Bus
+	streams    *streams.Manager
+	airplayMgr AirPlayManager // may be nil (dynamic AirPlay disabled)
 }
 
 // New creates and initializes a new Controller.
 // Loads state from the store and applies it to hardware.
 // profile may be nil (no hardware capability restrictions — used in tests).
 // mgr may be nil (streams subsystem disabled).
-func New(hw hardware.Driver, profile *hardware.HardwareProfile, store config.Store, bus *events.Bus, mgr *streams.Manager) (*Controller, error) {
+// airplayMgr may be nil (dynamic AirPlay container management disabled).
+func New(hw hardware.Driver, profile *hardware.HardwareProfile, store config.Store, bus *events.Bus, mgr *streams.Manager, airplayMgr AirPlayManager) (*Controller, error) {
 	state, err := store.Load()
 	if err != nil {
 		return nil, err
 	}
 
 	c := &Controller{
-		state:   *state,
-		hw:      hw,
-		profile: profile,
-		store:   store,
-		bus:     bus,
-		streams: mgr,
+		state:      *state,
+		hw:         hw,
+		profile:    profile,
+		store:      store,
+		bus:        bus,
+		streams:    mgr,
+		airplayMgr: airplayMgr,
 	}
 
 	// Apply initial state to hardware

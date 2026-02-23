@@ -16,57 +16,95 @@ class AmpliPiStore {
 	error = $state<string | null>(null);
 	connected = $state(false);
 
-	private pollInterval: number | null = null;
-	private pollDelay = 2000; // Poll every 2 seconds
+	private eventSource: EventSource | null = null;
+	private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+	private reconnectDelay = 1000; // Start with 1 second
+	private maxReconnectDelay = 30000; // Max 30 seconds
 
-	constructor() {
-		// Auto-start polling when store is created
-		this.startPolling();
-	}
+	async connect() {
+		this.loading = true;
+		this.error = null;
 
-	async fetchState() {
 		try {
+			// Initial state fetch
 			const state = await api.getState();
 			this.updateState(state);
 			this.connected = true;
-			this.error = null;
+
+			// Start SSE connection
+			this.startEventSource();
 		} catch (err) {
+			this.error = err instanceof Error ? err.message : 'Failed to connect';
 			this.connected = false;
-			this.error = err instanceof Error ? err.message : 'Failed to fetch state';
-			console.error('Failed to fetch state:', err);
+			this.scheduleReconnect();
 		} finally {
 			this.loading = false;
 		}
 	}
 
+	private startEventSource() {
+		// Close existing connection if any
+		if (this.eventSource) {
+			this.eventSource.close();
+		}
+
+		this.eventSource = new EventSource('/api/subscribe');
+
+		this.eventSource.onmessage = (event) => {
+			try {
+				const state = JSON.parse(event.data);
+				this.updateState(state);
+				this.connected = true;
+				this.error = null;
+
+				// Reset reconnect delay on successful connection
+				this.reconnectDelay = 1000;
+			} catch (err) {
+				console.error('Failed to parse SSE event:', err);
+			}
+		};
+
+		this.eventSource.onerror = () => {
+			this.connected = false;
+			this.eventSource?.close();
+			this.eventSource = null;
+			this.scheduleReconnect();
+		};
+	}
+
+	private scheduleReconnect() {
+		if (this.reconnectTimeout) {
+			clearTimeout(this.reconnectTimeout);
+		}
+
+		this.reconnectTimeout = setTimeout(() => {
+			console.log(`Reconnecting to SSE (delay: ${this.reconnectDelay}ms)...`);
+			this.connect();
+
+			// Exponential backoff
+			this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay);
+		}, this.reconnectDelay);
+	}
+
 	private updateState(state: State) {
-		this.sources = state.sources;
-		this.zones = state.zones;
-		this.groups = state.groups;
-		this.streams = state.streams;
-		this.presets = state.presets;
+		this.sources = state.sources || [];
+		this.zones = state.zones || [];
+		this.groups = state.groups || [];
+		this.streams = state.streams || [];
+		this.presets = state.presets || [];
 		this.info = state.info;
 	}
 
-	startPolling() {
-		// Initial fetch
-		this.fetchState();
-
-		// Set up polling
-		if (this.pollInterval) {
-			clearInterval(this.pollInterval);
+	disconnect() {
+		if (this.eventSource) {
+			this.eventSource.close();
+			this.eventSource = null;
 		}
-
-		this.pollInterval = window.setInterval(() => {
-			this.fetchState();
-		}, this.pollDelay);
-	}
-
-	stopPolling() {
-		if (this.pollInterval) {
-			clearInterval(this.pollInterval);
-			this.pollInterval = null;
+		if (this.reconnectTimeout) {
+			clearTimeout(this.reconnectTimeout);
+			this.reconnectTimeout = null;
 		}
+		this.connected = false;
 	}
 
 	// Helper methods for common operations

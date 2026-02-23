@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"sync"
 	"syscall"
 
 	"github.com/google/uuid"
@@ -17,11 +18,19 @@ import (
 type DLNAStream struct {
 	SubprocStream
 	name string
+
+	monCancel context.CancelFunc
+	monWg     sync.WaitGroup
+
+	onChange func(info models.StreamInfo)
 }
 
 // NewDLNAStream creates a new DLNA stream.
-func NewDLNAStream(name string) *DLNAStream {
-	return &DLNAStream{name: name}
+func NewDLNAStream(name string, onChange func(models.StreamInfo)) *DLNAStream {
+	return &DLNAStream{
+		name:     name,
+		onChange: onChange,
+	}
 }
 
 // Activate starts gmrender-resurrect with a per-instance UUID.
@@ -59,6 +68,10 @@ func (s *DLNAStream) Activate(ctx context.Context, vsrc int, configDir string) e
 
 func (s *DLNAStream) Deactivate(ctx context.Context) error {
 	slog.Info("dlna: deactivating", "name", s.name)
+	if s.monCancel != nil {
+		s.monCancel()
+	}
+	s.monWg.Wait()
 	return s.deactivateBase(ctx)
 }
 

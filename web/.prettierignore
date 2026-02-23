@@ -5,5 +5,16 @@ yarn.lock
 bun.lock
 bun.lockb
 
+# Dependencies
+node_modules/
+
+# Build Artifacts
+dist/
+build/
+.svelte-kit/
+
+# Testing
+coverage/
+
 # Miscellaneous
 /static/

@@ -13,10 +13,12 @@
 		{ path: '/streams', label: 'Streams', icon: '🎵' }
 	];
 
-	// Cleanup on unmount
+	// Connect on mount and cleanup on unmount
 	$effect(() => {
+		amplipi.connect();
+
 		return () => {
-			amplipi.stopPolling();
+			amplipi.disconnect();
 		};
 	});
 </script>

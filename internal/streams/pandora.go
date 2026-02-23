@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -281,6 +282,11 @@ func parsePianobarCurrentSong(line string) models.StreamInfo {
 	}
 	if len(parts) > 3 {
 		info.ImageURL = parts[3]
+	}
+	if len(parts) > 4 {
+		if rating, err := strconv.Atoi(strings.TrimSpace(parts[4])); err == nil && rating >= 0 && rating <= 5 {
+			info.Rating = &rating
+		}
 	}
 	if len(parts) > 5 {
 		info.Station = parts[5]

@@ -113,23 +113,46 @@
 			>
 				<!-- Source header -->
 				<div class="mb-4">
-					<div class="mb-2 flex items-start justify-between">
-						<div>
-							<h3 class="font-semibold text-gray-900 dark:text-white">{source.name}</h3>
-							{#if stream}
-								<p class="text-sm text-gray-600 dark:text-gray-400">{stream.name}</p>
-								{#if stream.info?.state}
-									<span
-										class={`mt-1 inline-block rounded px-2 py-0.5 text-xs font-medium ${stream.info.state === 'playing' ? 'bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-400' : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'}`}
-									>
-										{stream.info.state}
-									</span>
-								{/if}
-							{:else}
-								<p class="text-sm text-gray-500 dark:text-gray-500">No stream</p>
+					<div class="mb-2 flex items-start justify-between gap-2">
+						<div class="flex items-start gap-2 flex-1 min-w-0">
+							<!-- Album Art for source stream -->
+							{#if stream?.info?.img_url}
+								<img
+									src={stream.info.img_url}
+									alt="Now playing"
+									class="h-12 w-12 flex-shrink-0 rounded object-cover"
+									onerror={(e) => (e.currentTarget.style.display = 'none')}
+								/>
 							{/if}
+
+							<div class="flex-1 min-w-0">
+								<h3 class="font-semibold text-gray-900 dark:text-white">{source.name}</h3>
+								{#if stream}
+									{#if stream.info?.track}
+										<p class="text-sm font-medium text-gray-900 dark:text-white truncate">
+											{stream.info.track}
+										</p>
+										{#if stream.info.artist}
+											<p class="text-xs text-gray-500 dark:text-gray-400 truncate">
+												{stream.info.artist}
+											</p>
+										{/if}
+									{:else}
+										<p class="text-sm text-gray-600 dark:text-gray-400">{stream.name}</p>
+									{/if}
+									{#if stream.info?.state}
+										<span
+											class={`mt-1 inline-block rounded px-2 py-0.5 text-xs font-medium ${stream.info.state === 'playing' ? 'bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-400' : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'}`}
+										>
+											{stream.info.state}
+										</span>
+									{/if}
+								{:else}
+									<p class="text-sm text-gray-500 dark:text-gray-500">No stream</p>
+								{/if}
+							</div>
 						</div>
-						<span class="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/20 dark:text-blue-400">
+						<span class="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/20 dark:text-blue-400 flex-shrink-0">
 							{totalZoneCount} zone{totalZoneCount !== 1 ? 's' : ''}
 						</span>
 					</div>

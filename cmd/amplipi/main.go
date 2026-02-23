@@ -23,6 +23,7 @@ import (
 	"github.com/micro-nova/amplipi-go/internal/auth"
 	"github.com/micro-nova/amplipi-go/internal/config"
 	"github.com/micro-nova/amplipi-go/internal/controller"
+	"github.com/micro-nova/amplipi-go/internal/docker"
 	"github.com/micro-nova/amplipi-go/internal/events"
 	"github.com/micro-nova/amplipi-go/internal/hardware"
 	"github.com/micro-nova/amplipi-go/internal/maintenance"
@@ -154,8 +155,42 @@ func main() {
 		}
 	})
 
+	// AirPlay dynamic container manager (optional)
+	var airplayMgr *docker.AirPlayManager
+	if !*mock {
+		// Only enable dynamic AirPlay in production (requires Docker socket access)
+		image := os.Getenv("AIRPLAY_IMAGE")
+		if image == "" {
+			image = "ghcr.io/brianhealey/amplipi-airplay:latest"
+		}
+		macvlanNet := os.Getenv("MACVLAN_NETWORK")
+		if macvlanNet == "" {
+			macvlanNet = "amplipi-macvlan"
+		}
+		internalNet := os.Getenv("INTERNAL_NETWORK")
+		if internalNet == "" {
+			internalNet = "amplipi-internal"
+		}
+		configVol := os.Getenv("CONFIG_VOLUME")
+		if configVol == "" {
+			configVol = "amplipi-config"
+		}
+		ipStart := os.Getenv("AIRPLAY_IP_START")
+		if ipStart == "" {
+			ipStart = "10.100.10.98" // Default from .env.example
+		}
+
+		mgr, err := docker.NewAirPlayManager(image, macvlanNet, internalNet, configVol, ipStart)
+		if err != nil {
+			slog.Warn("failed to initialize AirPlay manager, dynamic containers disabled", "err", err)
+		} else {
+			airplayMgr = mgr
+			slog.Info("dynamic AirPlay container management enabled")
+		}
+	}
+
 	// Controller
-	ctrl, err := controller.New(hw, profile, store, bus, streamMgr)
+	ctrl, err := controller.New(hw, profile, store, bus, streamMgr, airplayMgr)
 	if err != nil {
 		slog.Error("controller initialization failed", "err", err)
 		os.Exit(1)

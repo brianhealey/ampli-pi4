@@ -286,21 +286,21 @@ func NewStreamer(stream models.Stream) (Streamer, error) {
 		return NewPandoraStream(name, username, password, station, nil), nil
 
 	case "airplay":
-		return NewAirPlayStream(name), nil
+		return NewAirPlayStream(name, nil), nil
 
 	case "spotify_connect", "spotify":
 		return NewSpotifyStream(name, nil), nil
 
 	case "internet_radio", "internetradio":
 		u := stream.ConfigString("url")
-		return NewInternetRadioStream(name, u), nil
+		return NewInternetRadioStream(name, u, nil), nil
 
 	case "file_player", "fileplayer":
 		path := stream.ConfigString("path")
-		return NewFilePlayerStream(name, path), nil
+		return NewFilePlayerStream(name, path, nil), nil
 
 	case "dlna":
-		return NewDLNAStream(name), nil
+		return NewDLNAStream(name, nil), nil
 
 	case "lms":
 		server := stream.ConfigString("server")
@@ -311,7 +311,7 @@ func NewStreamer(stream models.Stream) (Streamer, error) {
 		return NewFMRadioStream(name, freq), nil
 
 	case "bluetooth":
-		return NewBluetoothStream(name), nil
+		return NewBluetoothStream(name, nil), nil
 
 	case "plexamp":
 		return NewPlexampStream(name), nil

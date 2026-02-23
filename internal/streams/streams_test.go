@@ -779,7 +779,7 @@ func TestSubprocStream_DisconnectBase_Nil(t *testing.T) {
 
 func TestInternetRadioStream_Basics(t *testing.T) {
 	ctx := context.Background()
-	s := NewInternetRadioStream("BBC World", "http://bbc.co.uk/stream")
+	s := NewInternetRadioStream("BBC World", "http://bbc.co.uk/stream", nil)
 
 	if s.Type() != "internet_radio" {
 		t.Errorf("Type() = %q, want internet_radio", s.Type())
@@ -808,7 +808,7 @@ func TestInternetRadioStream_Basics(t *testing.T) {
 
 func TestAirPlayStream_Basics(t *testing.T) {
 	ctx := context.Background()
-	s := NewAirPlayStream("My AirPlay")
+	s := NewAirPlayStream("My AirPlay", nil)
 
 	if s.Type() != "airplay" {
 		t.Errorf("Type() = %q, want airplay", s.Type())
@@ -826,7 +826,7 @@ func TestAirPlayStream_Basics(t *testing.T) {
 
 func TestBluetoothStream_Basics(t *testing.T) {
 	ctx := context.Background()
-	s := NewBluetoothStream("Bluetooth")
+	s := NewBluetoothStream("Bluetooth", nil)
 
 	if s.Type() != "bluetooth" {
 		t.Errorf("Type() = %q, want bluetooth", s.Type())
@@ -847,7 +847,7 @@ func TestBluetoothStream_Basics(t *testing.T) {
 
 func TestDLNAStream_Basics(t *testing.T) {
 	ctx := context.Background()
-	s := NewDLNAStream("Living Room DLNA")
+	s := NewDLNAStream("Living Room DLNA", nil)
 
 	if s.Type() != "dlna" {
 		t.Errorf("Type() = %q, want dlna", s.Type())
@@ -941,7 +941,7 @@ func TestPandoraStream_SendCmdUnknown(t *testing.T) {
 
 func TestFilePlayerStream_Basics(t *testing.T) {
 	ctx := context.Background()
-	s := NewFilePlayerStream("Music", "/home/user/music")
+	s := NewFilePlayerStream("Music", "/home/user/music", nil)
 
 	if s.Type() != "file_player" {
 		t.Errorf("Type() = %q, want file_player", s.Type())
