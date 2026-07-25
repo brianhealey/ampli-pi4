@@ -393,8 +393,9 @@ func (c *Controller) waitForAnnouncementToFinish(ctx context.Context, streamID i
 	ticker := time.NewTicker(ANNOUNCE_POLL_INTERVAL)
 	defer ticker.Stop()
 
-	// Phase 1: Wait for stream to start playing (max 5 seconds)
-	startDeadline := time.Now().Add(5 * time.Second)
+	// Phase 1: Wait for stream to start playing (max 10 seconds)
+	// VLC can take several seconds to start, especially with network URLs
+	startDeadline := time.Now().Add(10 * time.Second)
 	streamStarted := false
 
 	for !streamStarted {
@@ -406,15 +407,25 @@ func (c *Controller) waitForAnnouncementToFinish(ctx context.Context, streamID i
 				return models.ErrInternal("announcement stream failed to start")
 			}
 
-			c.mu.RLock()
-			stream := findStream(&c.state, streamID)
-			c.mu.RUnlock()
-
-			if stream == nil {
-				return models.ErrInternal("announcement stream was deleted before starting")
+			// Query the stream manager directly for live state
+			// (the model state is updated asynchronously and may lag)
+			var state string
+			if c.streams != nil {
+				if info := c.streams.Info(streamID); info != nil {
+					state = info.State
+				}
+			}
+			// Fallback to model state if manager unavailable
+			if state == "" {
+				c.mu.RLock()
+				stream := findStream(&c.state, streamID)
+				c.mu.RUnlock()
+				if stream == nil {
+					return models.ErrInternal("announcement stream was deleted before starting")
+				}
+				state = stream.Info.State
 			}
 
-			state := stream.Info.State
 			if state == "playing" || state == "loading" {
 				streamStarted = true
 			}
@@ -431,16 +442,27 @@ func (c *Controller) waitForAnnouncementToFinish(ctx context.Context, streamID i
 				return models.ErrInternal("announcement timeout exceeded")
 			}
 
-			c.mu.RLock()
-			stream := findStream(&c.state, streamID)
-			c.mu.RUnlock()
-
-			if stream == nil {
-				// Stream was deleted, announcement is done
-				return nil
+			// Query the stream manager directly for live state
+			var state string
+			var streamExists bool
+			if c.streams != nil {
+				if info := c.streams.Info(streamID); info != nil {
+					state = info.State
+					streamExists = true
+				}
+			}
+			// Fallback to model state if manager unavailable
+			if !streamExists {
+				c.mu.RLock()
+				stream := findStream(&c.state, streamID)
+				c.mu.RUnlock()
+				if stream == nil {
+					// Stream was deleted, announcement is done
+					return nil
+				}
+				state = stream.Info.State
 			}
 
-			state := stream.Info.State
 			if state == "stopped" || state == "disconnected" || state == "" {
 				// Announcement finished
 				return nil

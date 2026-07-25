@@ -29,6 +29,8 @@ type Supervisor struct {
 	maxFails    int
 	fastFailSec float64
 	maxBackoff  time.Duration
+	runOnce     bool                // If true, don't restart after process exits
+	onExit      func(error)         // Called when process exits (before restart decision)
 
 	// Internal state (protected by mu)
 	mu           sync.Mutex
@@ -187,6 +189,17 @@ func (s *Supervisor) supervise(ctx context.Context) {
 
 		elapsed := time.Since(startTime)
 		slog.Info("supervisor: process exited", "name", s.name, "pid", pid, "elapsed", elapsed, "err", exitErr)
+
+		// Call onExit callback if set
+		if s.onExit != nil {
+			s.onExit(exitErr)
+		}
+
+		// If runOnce mode, don't restart
+		if s.runOnce {
+			slog.Info("supervisor: runOnce mode, not restarting", "name", s.name)
+			return
+		}
 
 		s.mu.Lock()
 		s.currentPID = 0

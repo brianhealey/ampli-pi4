@@ -44,11 +44,19 @@ func (s *FilePlayerStream) Activate(ctx context.Context, vsrc int, configDir str
 			"--aout", "alsa",
 			"--alsa-audio-device", device,
 			"--no-video",
+			"--play-and-exit", // Exit after playing the file
+			"--no-loop",       // Don't loop
 			path,
 		)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		return cmd
 	})
+	// File player should play once and stop, not restart
+	s.sup.runOnce = true
+	s.sup.onExit = func(err error) {
+		slog.Info("file_player: playback finished", "name", s.name, "err", err)
+		s.setInfo(models.StreamInfo{Name: s.name, State: "stopped"})
+	}
 
 	s.setInfo(models.StreamInfo{Name: s.name, State: "playing"})
 	return s.activateBase(ctx, vsrc, dir)
