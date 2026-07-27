@@ -3,6 +3,7 @@
 	import { api } from '$lib/api';
 	import type { Zone } from '$lib/types';
 	import { filterZonesByGroup } from '$lib/grouping';
+	import { dbToPercent, percentToDb, volFToPercent } from '$lib/volume';
 
 	let expandedGroups = $state<Set<number>>(new Set());
 	// Track previous slider position (0-100) for each group to calculate deltas
@@ -70,14 +71,6 @@
 		}
 	}
 
-	function volFToPercent(vol_f: number): number {
-		return Math.round(vol_f * 100);
-	}
-
-	function percentToVolF(percent: number): number {
-		return percent / 100;
-	}
-
 	function toggleGroupExpanded(groupId: number) {
 		// Create a new Set to ensure reactivity triggers
 		const newExpanded = new Set(expandedGroups);
@@ -87,14 +80,6 @@
 			newExpanded.add(groupId);
 		}
 		expandedGroups = newExpanded;
-	}
-
-	function dbToPercent(db: number, min: number = -79, max: number = 0): number {
-		return Math.round(((db - min) / (max - min)) * 100);
-	}
-
-	function percentToDb(percent: number, min: number = -79, max: number = 0): number {
-		return Math.round(min + (percent / 100) * (max - min));
 	}
 
 	function availableStreamsForZone(_zone: Zone): typeof amplipi.streams {
@@ -162,6 +147,8 @@
 							<button
 								onclick={() => toggleGroupExpanded(group.id)}
 								class="flex-1 text-left"
+								aria-expanded={isExpanded}
+								aria-controls="group-zones-{group.id}"
 							>
 								<h3 class="font-semibold text-purple-900 dark:text-purple-300">
 									{isExpanded ? '▼' : '▶'} {group.name}
@@ -177,8 +164,10 @@
 								class:text-gray-400={group.mute}
 								class:text-purple-600={!group.mute}
 								class:dark:text-purple-400={!group.mute}
+								aria-label={group.mute ? `Unmute ${group.name}` : `Mute ${group.name}`}
+								aria-pressed={!group.mute}
 							>
-								<span class="text-2xl">{group.mute ? '🔇' : '🔊'}</span>
+								<span class="text-2xl" aria-hidden="true">{group.mute ? '🔇' : '🔊'}</span>
 							</button>
 						</div>
 
@@ -217,6 +206,11 @@
 									}
 								}}
 								class="w-full accent-purple-600"
+								aria-label="Group volume for {group.name}"
+								aria-valuemin={0}
+								aria-valuemax={100}
+								aria-valuenow={volFToPercent(group.vol_f ?? 0)}
+								aria-valuetext="{volFToPercent(group.vol_f ?? 0)} percent"
 							/>
 
 							<div class="flex items-center justify-between text-xs text-purple-500 dark:text-purple-400">
@@ -228,10 +222,11 @@
 
 					<!-- Group input selector -->
 					<div class="mt-3">
-						<label class="mb-1 block text-sm font-medium text-purple-700 dark:text-purple-300">
+						<label for="group-input-{group.id}" class="mb-1 block text-sm font-medium text-purple-700 dark:text-purple-300">
 							Group Input
 						</label>
 						<select
+							id="group-input-{group.id}"
 							value={group.source_id !== undefined && group.source_id >= 0 ? amplipi.getSource(group.source_id)?.input || '' : 'none'}
 							onchange={(e) => handleGroupInputChange(group.id, e.currentTarget.value)}
 							class="w-full rounded border border-purple-300 bg-white px-2 py-1 text-sm focus:border-purple-500 focus:ring-2 focus:ring-purple-500 dark:border-purple-700 dark:bg-purple-900/30 dark:text-white"
@@ -241,7 +236,7 @@
 								<option value="stream={stream.id}">
 									{stream.name}
 									{#if stream.type === 'rca' && stream.config?.index !== undefined}
-										(RCA Input {stream.config.index + 1})
+										(RCA Input {(stream.config.index as number) + 1})
 									{/if}
 								</option>
 							{/each}
@@ -258,7 +253,7 @@
 
 				<!-- Expanded group zones -->
 					{#if isExpanded}
-						<div class="space-y-3 border-t border-purple-200 pt-4 dark:border-purple-800">
+						<div id="group-zones-{group.id}" class="space-y-3 border-t border-purple-200 pt-4 dark:border-purple-800">
 							<h4 class="text-xs font-semibold uppercase text-purple-700 dark:text-purple-400">
 								Member Zones
 							</h4>
@@ -279,8 +274,10 @@
 											class:text-gray-400={zone.mute}
 											class:text-blue-600={!zone.mute}
 											class:dark:text-blue-400={!zone.mute}
+											aria-label={zone.mute ? `Unmute ${zone.name}` : `Mute ${zone.name}`}
+											aria-pressed={!zone.mute}
 										>
-											<span class="text-lg">{zone.mute ? '🔇' : '🔊'}</span>
+											<span class="text-lg" aria-hidden="true">{zone.mute ? '🔇' : '🔊'}</span>
 										</button>
 									</div>
 
@@ -304,6 +301,11 @@
 												updateZone(zone.id, { vol: db });
 											}}
 											class="w-full accent-blue-600"
+											aria-label="Volume for {zone.name}"
+											aria-valuemin={0}
+											aria-valuemax={100}
+											aria-valuenow={dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}
+											aria-valuetext="{dbToPercent(zone.vol, zone.vol_min, zone.vol_max)} percent"
 										/>
 									</div>
 								</div>
@@ -338,15 +340,17 @@
 						class:text-gray-400={zone.mute}
 						class:text-blue-600={!zone.mute}
 						class:dark:text-blue-400={!zone.mute}
+						aria-label={zone.mute ? `Unmute ${zone.name}` : `Mute ${zone.name}`}
+						aria-pressed={!zone.mute}
 					>
-						<span class="text-2xl">{zone.mute ? '🔇' : '🔊'}</span>
+						<span class="text-2xl" aria-hidden="true">{zone.mute ? '🔇' : '🔊'}</span>
 					</button>
 				</div>
 
 				<!-- Volume control -->
-				<div class="space-y-2">
+				<div class="space-y-2" role="group" aria-labelledby="vol-label-{zone.id}">
 					<div class="flex items-center justify-between">
-						<span class="text-sm font-medium text-gray-700 dark:text-gray-300">Volume</span>
+						<span id="vol-label-{zone.id}" class="text-sm font-medium text-gray-700 dark:text-gray-300">Volume</span>
 						<span class="text-sm text-gray-600 dark:text-gray-400">
 							{dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}%
 						</span>
@@ -363,6 +367,11 @@
 							updateZone(zone.id, { vol: db });
 						}}
 						class="w-full accent-blue-600"
+						aria-label="Volume for {zone.name}"
+						aria-valuemin={0}
+						aria-valuemax={100}
+						aria-valuenow={dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}
+						aria-valuetext="{dbToPercent(zone.vol, zone.vol_min, zone.vol_max)} percent"
 					/>
 
 					<div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
@@ -373,10 +382,11 @@
 
 				<!-- Stream selector -->
 				<div class="mt-4">
-					<label class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+					<label for="zone-input-{zone.id}" class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
 						Input
 					</label>
 					<select
+						id="zone-input-{zone.id}"
 						value={zone.source_id >= 0 ? amplipi.getSource(zone.source_id)?.input || '' : 'none'}
 						onchange={(e) => handleSourceInputChange(zone.id, e.currentTarget.value)}
 						class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
@@ -386,7 +396,7 @@
 							<option value="stream={stream.id}">
 								{stream.name}
 								{#if stream.type === 'rca' && stream.config?.index !== undefined}
-									(RCA Input {stream.config.index + 1})
+									(RCA Input {(stream.config.index as number) + 1})
 								{/if}
 							</option>
 						{/each}

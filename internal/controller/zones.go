@@ -97,7 +97,12 @@ func applyZoneUpdate(ctx context.Context, c *Controller, s *models.State, z *mod
 		z.Disabled = *upd.Disabled
 	}
 	if upd.SourceID != nil {
-		z.SourceID = *upd.SourceID
+		srcID := *upd.SourceID
+		// Validate source_id is in valid range: -1 (disconnected) or 0-3
+		if srcID < -1 || srcID >= models.MaxSources {
+			return fmt.Errorf("source_id must be -1 (disconnected) or 0-%d", models.MaxSources-1)
+		}
+		z.SourceID = srcID
 	}
 	if upd.VolMin != nil {
 		z.VolMin = *upd.VolMin
@@ -107,23 +112,24 @@ func applyZoneUpdate(ctx context.Context, c *Controller, s *models.State, z *mod
 	}
 
 	// Volume updates: vol_f takes precedence, then vol, then vol_delta_f
+	// Use zone's VolMin/VolMax for conversion (matching legacy Python behavior)
 	if upd.VolF != nil {
-		z.Vol = models.VolFToDB(*upd.VolF)
+		z.Vol = models.VolFToDBRange(*upd.VolF, z.VolMin, z.VolMax)
 		z.VolF = *upd.VolF
 	} else if upd.Vol != nil {
 		z.Vol = *upd.Vol
-		z.VolF = models.DBToVolF(*upd.Vol)
+		z.VolF = models.DBToVolFRange(*upd.Vol, z.VolMin, z.VolMax)
 	} else if upd.VolDeltaF != nil {
 		// Apply relative delta: delta maps to a range within [VolMin, VolMax]
 		rangeDB := float64(z.VolMax - z.VolMin)
 		deltaDB := int(*upd.VolDeltaF * rangeDB)
 		z.Vol = z.Vol + deltaDB
-		z.VolF = models.DBToVolF(z.Vol)
+		z.VolF = models.DBToVolFRange(z.Vol, z.VolMin, z.VolMax)
 	}
 
 	// Clamp vol to zone limits
 	z.Vol = models.ClampVol(z.Vol, z.VolMin, z.VolMax)
-	z.VolF = models.DBToVolF(z.Vol)
+	z.VolF = models.DBToVolFRange(z.Vol, z.VolMin, z.VolMax)
 
 	if upd.Mute != nil {
 		z.Mute = *upd.Mute

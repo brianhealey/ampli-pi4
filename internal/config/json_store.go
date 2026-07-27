@@ -19,10 +19,11 @@ const (
 
 // JSONStore is an atomic JSON file store with debounced writes.
 type JSONStore struct {
-	mu      sync.Mutex
-	path    string
-	timer   *time.Timer
-	pending *models.State
+	mu       sync.Mutex
+	path     string
+	timer    *time.Timer
+	pending  *models.State
+	writing  bool // true while writeAtomic is in progress
 }
 
 // NewJSONStore creates a new JSON store in the given config directory.
@@ -64,38 +65,74 @@ func (s *JSONStore) Save(state *models.State) error {
 	defer s.mu.Unlock()
 
 	// Take a copy so we don't hold a reference to the caller's state
-	copy := *state
-	s.pending = &copy
+	stateCopy := *state
+	s.pending = &stateCopy
 
 	if s.timer != nil {
 		s.timer.Stop()
 	}
 	s.timer = time.AfterFunc(debounceDelay, func() {
-		s.mu.Lock()
-		st := s.pending
-		s.mu.Unlock()
-		if st != nil {
-			if err := s.writeAtomic(st); err != nil {
-				slog.Error("config: failed to write state", "path", s.path, "err", err)
-			}
-		}
+		s.doWrite()
 	})
 	return nil
 }
 
+// doWrite executes the debounced write operation.
+// Releases the lock during disk I/O to prevent blocking audio operations.
+func (s *JSONStore) doWrite() {
+	s.mu.Lock()
+
+	if s.pending == nil {
+		s.mu.Unlock()
+		return
+	}
+
+	s.writing = true
+	st := s.pending
+	s.pending = nil // Clear pending before write
+	s.mu.Unlock()   // Release lock before I/O to avoid blocking audio operations
+
+	err := s.writeAtomic(st)
+
+	s.mu.Lock()
+	s.writing = false
+	s.mu.Unlock()
+
+	if err != nil {
+		slog.Error("config: failed to write state", "path", s.path, "err", err)
+	}
+}
+
 // Flush forces an immediate write of any pending state.
+// This blocks until the write is complete.
 func (s *JSONStore) Flush() error {
 	s.mu.Lock()
+
+	// Cancel any pending debounced write
 	if s.timer != nil {
 		s.timer.Stop()
 		s.timer = nil
 	}
-	st := s.pending
-	s.mu.Unlock()
-	if st == nil {
+
+	// Nothing to write
+	if s.pending == nil {
+		s.mu.Unlock()
 		return nil
 	}
-	return s.writeAtomic(st)
+
+	// Get the pending state and clear it
+	st := s.pending
+	s.pending = nil
+	s.writing = true
+	s.mu.Unlock() // Release lock before I/O
+
+	err := s.writeAtomic(st)
+
+	s.mu.Lock()
+	s.writing = false
+	s.mu.Unlock()
+
+	return err
 }
 
 func (s *JSONStore) writeAtomic(state *models.State) error {

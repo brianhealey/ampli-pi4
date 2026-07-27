@@ -171,12 +171,34 @@ func (s State) DeepCopy() State {
 	for i, p := range s.Presets {
 		np := Preset{ID: p.ID, Name: p.Name}
 		if p.State != nil {
-			ps := *p.State
+			// Deep copy PresetState including all internal slices
+			ps := PresetState{}
+			if p.State.Sources != nil {
+				ps.Sources = make([]SourceUpdate, len(p.State.Sources))
+				copy(ps.Sources, p.State.Sources)
+			}
+			if p.State.Zones != nil {
+				ps.Zones = make([]ZoneUpdate, len(p.State.Zones))
+				copy(ps.Zones, p.State.Zones)
+			}
+			if p.State.Groups != nil {
+				ps.Groups = make([]GroupUpdate, len(p.State.Groups))
+				copy(ps.Groups, p.State.Groups)
+			}
 			np.State = &ps
 		}
 		if p.Commands != nil {
 			np.Commands = make([]Command, len(p.Commands))
-			copy(np.Commands, p.Commands)
+			for j, cmd := range p.Commands {
+				nc := cmd
+				if cmd.Data != nil {
+					nc.Data = make(map[string]interface{}, len(cmd.Data))
+					for k, v := range cmd.Data {
+						nc.Data[k] = v
+					}
+				}
+				np.Commands[j] = nc
+			}
 		}
 		next.Presets[i] = np
 	}

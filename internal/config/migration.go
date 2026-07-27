@@ -49,9 +49,9 @@ func migrateState(state *models.State) {
 		if z.Vol > z.VolMax {
 			z.Vol = z.VolMax
 		}
-		// Sync vol_f from vol if not set
+		// Sync vol_f from vol if not set (use zone's range)
 		if z.VolF == 0 && z.Vol != z.VolMin {
-			z.VolF = models.DBToVolF(z.Vol)
+			z.VolF = models.DBToVolFRange(z.Vol, z.VolMin, z.VolMax)
 		}
 	}
 

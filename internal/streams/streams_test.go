@@ -110,7 +110,7 @@ func TestNewStreamer_AllTypes(t *testing.T) {
 				Type:   tt.streamType,
 				Config: tt.config,
 			}
-			streamer, err := NewStreamer(stream)
+			streamer, err := NewStreamer(stream, nil)
 			if err != nil {
 				t.Fatalf("NewStreamer(%q) error: %v", tt.streamType, err)
 			}
@@ -123,7 +123,7 @@ func TestNewStreamer_AllTypes(t *testing.T) {
 
 func TestNewStreamer_UnknownType(t *testing.T) {
 	stream := models.Stream{ID: 1, Name: "Unknown", Type: "does_not_exist"}
-	_, err := NewStreamer(stream)
+	_, err := NewStreamer(stream, nil)
 	if err == nil {
 		t.Fatal("expected error for unknown stream type")
 	}
@@ -613,7 +613,7 @@ func TestStreamNeedsVSRC(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.streamType, func(t *testing.T) {
 			stream := models.Stream{ID: 1, Name: "test", Type: tt.streamType}
-			streamer, err := NewStreamer(stream)
+			streamer, err := NewStreamer(stream, nil)
 			if err != nil {
 				t.Skipf("cannot create %s streamer: %v", tt.streamType, err)
 			}

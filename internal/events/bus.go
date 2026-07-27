@@ -7,7 +7,10 @@ import (
 	"github.com/micro-nova/amplipi-go/internal/models"
 )
 
-const subBufferSize = 8
+// subBufferSize is the buffer size for subscriber channels.
+// Increased from 8 to 32 to handle rapid volume changes and stream metadata updates
+// during real-time audio control without dropping events.
+const subBufferSize = 32
 
 // Bus is a non-blocking publish-subscribe event bus.
 // Subscribers that are slow to consume events will have events dropped rather

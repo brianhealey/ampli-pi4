@@ -12,11 +12,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"syscall"
-	"time"
-
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/micro-nova/amplipi-go/internal/api"
@@ -170,6 +170,9 @@ func main() {
 	}
 	defer authSvc.Close()
 
+	// WaitGroup for tracking background goroutines
+	var wg sync.WaitGroup
+
 	// Maintenance goroutines (online check, release check, config backups)
 	maint := maintenance.New(*cfgDir,
 		func(online bool) {
@@ -179,7 +182,11 @@ func main() {
 			slog.Info("new release available", "version", release)
 		},
 	)
-	go maint.Start(ctx)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		maint.Start(ctx)
+	}()
 
 	// Zeroconf mDNS registration
 	hostname, _ := os.Hostname()
@@ -190,14 +197,20 @@ func main() {
 		}
 	}
 	zc := zeroconf.New(hostname, port)
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		if err := zc.Start(ctx); err != nil {
 			slog.Warn("zeroconf failed", "err", err)
 		}
 	}()
 
 	// Background goroutines
-	go hardware.RunPiTempSender(ctx, hw)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		hardware.RunPiTempSender(ctx, hw)
+	}()
 
 	// HTTP server
 	router := api.NewRouter(ctrl, authSvc, bus)
@@ -244,6 +257,20 @@ func main() {
 	// Graceful HTTP shutdown
 	if err := srv.Shutdown(shutCtx); err != nil {
 		slog.Warn("server shutdown error", "err", err)
+	}
+
+	// Wait for background goroutines with timeout
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		slog.Info("all background tasks completed")
+	case <-time.After(5 * time.Second):
+		slog.Warn("timeout waiting for background tasks")
 	}
 
 	slog.Info("shutdown complete")

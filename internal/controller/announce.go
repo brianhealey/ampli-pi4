@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/micro-nova/amplipi-go/internal/models"
+	"github.com/micro-nova/amplipi-go/internal/streams"
 )
 
 const (
@@ -33,6 +34,11 @@ func (c *Controller) Announce(ctx context.Context, req models.AnnounceRequest) (
 		return models.State{}, models.ErrBadRequest("media URL is required")
 	}
 
+	// Validate media URL/path to prevent command injection
+	if err := streams.ValidateFilePath(req.Media); err != nil {
+		return models.State{}, models.ErrBadRequest(fmt.Sprintf("invalid media: %v", err))
+	}
+
 	// Set defaults
 	sourceID := 3 // default to source 3
 	if req.SourceID != nil {
@@ -50,8 +56,13 @@ func (c *Controller) Announce(ctx context.Context, req models.AnnounceRequest) (
 		}
 	}
 
-	// Step 1: Save current state to a restore preset
-	saveState, err := c.saveCurrentState(ctx)
+	// Step 1: Read current state (single lock acquisition to avoid deadlock)
+	c.mu.RLock()
+	currentState := c.state.DeepCopy()
+	c.mu.RUnlock()
+
+	// Step 1b: Save current state to a restore preset (uses the pre-read state)
+	saveState, err := c.saveCurrentStateFromCopy(ctx, currentState)
 	if err != nil {
 		return models.State{}, err
 	}
@@ -64,16 +75,16 @@ func (c *Controller) Announce(ctx context.Context, req models.AnnounceRequest) (
 		return models.State{}, err
 	}
 
-	// Step 3: Determine target zones
-	targetZones, err := c.determineTargetZones(req.Zones, req.Groups)
+	// Step 3: Determine target zones (use pre-read state to avoid nested locks)
+	targetZones, err := c.determineTargetZonesFromState(currentState, req.Zones, req.Groups)
 	if err != nil {
 		// Cleanup stream and restore state
 		_, _ = c.restoreStateAndCleanup(ctx, saveState, streamID)
 		return models.State{}, err
 	}
 
-	// Step 4: Create and load announcement preset
-	announcementState, err := c.createAndLoadAnnouncementPreset(ctx, sourceID, streamID, targetZones, req.Vol, volF)
+	// Step 4: Create and load announcement preset (use pre-read state to avoid nested locks)
+	announcementState, err := c.createAndLoadAnnouncementPreset(ctx, currentState, sourceID, streamID, targetZones, req.Vol, volF)
 	if err != nil {
 		// Cleanup stream and restore state
 		_, _ = c.restoreStateAndCleanup(ctx, saveState, streamID)
@@ -96,12 +107,9 @@ func (c *Controller) Announce(ctx context.Context, req models.AnnounceRequest) (
 	return finalState, nil
 }
 
-// saveCurrentState captures the current system state in a preset for later restoration
-func (c *Controller) saveCurrentState(ctx context.Context) (models.State, *models.AppError) {
-	c.mu.RLock()
-	currentState := c.state.DeepCopy()
-	c.mu.RUnlock()
-
+// saveCurrentStateFromCopy captures the provided system state in a preset for later restoration.
+// This avoids acquiring locks when called from Announce() which already read the state.
+func (c *Controller) saveCurrentStateFromCopy(ctx context.Context, currentState models.State) (models.State, *models.AppError) {
 	// Build a preset that captures current source, zone, and group state
 	var sourceUpdates []models.SourceUpdate
 	for _, src := range currentState.Sources {
@@ -227,17 +235,15 @@ func (c *Controller) createAnnouncementStream(ctx context.Context, mediaURL stri
 	return streamID, nil
 }
 
-// determineTargetZones resolves the target zones from the zones and groups lists
-// If both are empty, returns all enabled zones
-func (c *Controller) determineTargetZones(zoneIDs, groupIDs []int) ([]int, *models.AppError) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
+// determineTargetZonesFromState resolves the target zones from the zones and groups lists
+// using the provided state. If both are empty, returns all enabled zones.
+// This avoids acquiring locks when called from Announce() which already read the state.
+func (c *Controller) determineTargetZonesFromState(state models.State, zoneIDs, groupIDs []int) ([]int, *models.AppError) {
 	targetZones := make(map[int]bool)
 
 	// If both zones and groups are empty, use all enabled zones
 	if len(zoneIDs) == 0 && len(groupIDs) == 0 {
-		for _, z := range c.state.Zones {
+		for _, z := range state.Zones {
 			if !z.Disabled {
 				targetZones[z.ID] = true
 			}
@@ -245,7 +251,7 @@ func (c *Controller) determineTargetZones(zoneIDs, groupIDs []int) ([]int, *mode
 	} else {
 		// Add explicitly specified zones
 		for _, zid := range zoneIDs {
-			z := findZone(&c.state, zid)
+			z := findZone(&state, zid)
 			if z != nil && !z.Disabled {
 				targetZones[zid] = true
 			}
@@ -253,10 +259,10 @@ func (c *Controller) determineTargetZones(zoneIDs, groupIDs []int) ([]int, *mode
 
 		// Add zones from groups
 		for _, gid := range groupIDs {
-			g := findGroup(&c.state, gid)
+			g := findGroup(&state, gid)
 			if g != nil {
 				for _, zid := range g.ZoneIDs {
-					z := findZone(&c.state, zid)
+					z := findZone(&state, zid)
 					if z != nil && !z.Disabled {
 						targetZones[zid] = true
 					}
@@ -279,9 +285,10 @@ func (c *Controller) determineTargetZones(zoneIDs, groupIDs []int) ([]int, *mode
 }
 
 // createAndLoadAnnouncementPreset creates a preset that configures the announcement
-// and immediately loads it
+// and immediately loads it. Uses the provided state to avoid acquiring nested locks.
 func (c *Controller) createAndLoadAnnouncementPreset(
 	ctx context.Context,
+	currentState models.State,
 	sourceID, streamID int,
 	targetZones []int,
 	volDB *int,
@@ -321,15 +328,13 @@ func (c *Controller) createAndLoadAnnouncementPreset(
 		zoneUpdates = append(zoneUpdates, update)
 	}
 
-	// Get all zones affected by changing this source
-	c.mu.RLock()
+	// Get all zones affected by changing this source (from pre-read state)
 	affectedZones := make(map[int]bool)
-	for _, z := range c.state.Zones {
+	for _, z := range currentState.Zones {
 		if z.SourceID == sourceID {
 			affectedZones[z.ID] = true
 		}
 	}
-	c.mu.RUnlock()
 
 	// Mute zones affected by source change but not in announcement
 	for zid := range affectedZones {

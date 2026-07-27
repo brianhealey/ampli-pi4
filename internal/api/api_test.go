@@ -396,7 +396,7 @@ func TestDeleteStream(t *testing.T) {
 	srv := newTestServer(t)
 
 	// Create a stream first
-	resp := do(t, srv, "POST", "/api/stream", `{"name":"ToDelete","type":"internet_radio"}`)
+	resp := do(t, srv, "POST", "/api/stream", `{"name":"ToDelete","type":"internet_radio","config":{"url":"http://example.com/stream"}}`)
 	requireStatus(t, resp, http.StatusCreated)
 
 	var createState models.State
@@ -832,7 +832,7 @@ func TestPatchStream(t *testing.T) {
 	srv := newTestServer(t)
 
 	// Create a stream
-	resp := do(t, srv, "POST", "/api/stream", `{"name":"PatchStream","type":"internet_radio"}`)
+	resp := do(t, srv, "POST", "/api/stream", `{"name":"PatchStream","type":"internet_radio","config":{"url":"http://example.com/stream"}}`)
 	requireStatus(t, resp, http.StatusCreated)
 
 	var createState models.State
@@ -929,6 +929,8 @@ func TestCORSOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
+	// Set Origin header to trigger CORS handling
+	req.Header.Set("Origin", "http://localhost:5173")
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -938,6 +940,11 @@ func TestCORSOptions(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("OPTIONS status = %d, want 204", resp.StatusCode)
+	}
+
+	// Verify CORS headers are set
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want http://localhost:5173", got)
 	}
 }
 
@@ -1049,7 +1056,7 @@ func TestSetPreset_InvalidJSON(t *testing.T) {
 func TestSetStream_InvalidJSON(t *testing.T) {
 	srv := newTestServer(t)
 
-	resp := do(t, srv, "POST", "/api/stream", `{"name":"Test","type":"internet_radio"}`)
+	resp := do(t, srv, "POST", "/api/stream", `{"name":"Test","type":"internet_radio","config":{"url":"http://example.com/stream"}}`)
 	requireStatus(t, resp, http.StatusCreated)
 
 	var createState models.State
@@ -1069,7 +1076,7 @@ func TestExecStreamCmd(t *testing.T) {
 	srv := newTestServer(t)
 
 	// Create a stream first
-	resp := do(t, srv, "POST", "/api/stream", `{"name":"CmdStream","type":"internet_radio"}`)
+	resp := do(t, srv, "POST", "/api/stream", `{"name":"CmdStream","type":"internet_radio","config":{"url":"http://example.com/stream"}}`)
 	requireStatus(t, resp, http.StatusCreated)
 
 	var createState models.State

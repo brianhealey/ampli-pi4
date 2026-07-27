@@ -87,7 +87,15 @@ func (m *Manager) Sync(ctx context.Context, modelStreams []models.Stream, source
 	for id, stream := range desiredIDs {
 		if _, exists := m.streams[id]; !exists {
 			slog.Info("stream manager: adding new stream", "id", id, "type", stream.Type, "name", stream.Name)
-			streamer, err := NewStreamer(stream)
+			// Create a closure to wrap the onChange callback with the stream ID
+			var streamOnChange func(models.StreamInfo)
+			if m.onChange != nil {
+				streamID := id // capture for closure
+				streamOnChange = func(info models.StreamInfo) {
+					m.onChange(streamID, info)
+				}
+			}
+			streamer, err := NewStreamer(stream, streamOnChange)
 			if err != nil {
 				slog.Error("stream manager: could not create streamer", "id", id, "type", stream.Type, "err", err)
 				continue
@@ -269,8 +277,15 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 }
 
 // NewStreamer creates the correct Streamer implementation for a stream model.
-func NewStreamer(stream models.Stream) (Streamer, error) {
+// All user-supplied configuration values are validated before creating the streamer.
+// onChange is called when a stream's metadata changes (may be nil for streams that don't support it).
+func NewStreamer(stream models.Stream, onChange func(models.StreamInfo)) (Streamer, error) {
 	name := stream.Name
+
+	// Validate stream name
+	if err := ValidateStreamName(name); err != nil {
+		return nil, fmt.Errorf("invalid stream name: %w", err)
+	}
 
 	switch stream.Type {
 	case "rca":
@@ -283,20 +298,27 @@ func NewStreamer(stream models.Stream) (Streamer, error) {
 		username := stream.ConfigString("user")
 		password := stream.ConfigString("password")
 		station := stream.ConfigString("station")
-		return NewPandoraStream(name, username, password, station, nil), nil
+		// Pandora credentials are validated by the Pandora service
+		return NewPandoraStream(name, username, password, station, onChange), nil
 
 	case "airplay":
 		return NewAirPlayStream(name), nil
 
 	case "spotify_connect", "spotify":
-		return NewSpotifyStream(name, nil), nil
+		return NewSpotifyStream(name, onChange), nil
 
 	case "internet_radio", "internetradio":
 		u := stream.ConfigString("url")
+		if err := ValidateStreamURL(u); err != nil {
+			return nil, fmt.Errorf("invalid stream URL: %w", err)
+		}
 		return NewInternetRadioStream(name, u), nil
 
 	case "file_player", "fileplayer":
 		path := stream.ConfigString("path")
+		if err := ValidateFilePath(path); err != nil {
+			return nil, fmt.Errorf("invalid file path: %w", err)
+		}
 		return NewFilePlayerStream(name, path), nil
 
 	case "dlna":
@@ -304,10 +326,16 @@ func NewStreamer(stream models.Stream) (Streamer, error) {
 
 	case "lms":
 		server := stream.ConfigString("server")
-		return NewLMSStream(name, server, nil), nil
+		if err := ValidateLMSServer(server); err != nil {
+			return nil, fmt.Errorf("invalid LMS server: %w", err)
+		}
+		return NewLMSStream(name, server, onChange), nil
 
 	case "fm_radio", "fmradio":
 		freq := stream.ConfigString("freq")
+		if err := ValidateFrequency(freq); err != nil {
+			return nil, fmt.Errorf("invalid frequency: %w", err)
+		}
 		return NewFMRadioStream(name, freq), nil
 
 	case "bluetooth":

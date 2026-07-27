@@ -11,10 +11,18 @@ import (
 	"github.com/micro-nova/amplipi-go/internal/models"
 )
 
+// AuthService defines the authentication interface used by handlers.
+type AuthService interface {
+	VerifyPassword(password string) (accessKey string, ok bool)
+	IsOpenMode() bool
+}
+
 // Handlers holds dependencies for all HTTP handlers.
 type Handlers struct {
-	ctrl   Controller
-	events EventBus
+	ctrl      Controller
+	events    EventBus
+	auth      AuthService
+	configDir string // config directory for backup/restore operations
 }
 
 // Controller is the interface the handlers use to interact with the system state.

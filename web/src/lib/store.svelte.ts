@@ -18,6 +18,7 @@ class AmpliPiStore {
 
 	private pollInterval: number | null = null;
 	private pollDelay = 2000; // Poll every 2 seconds
+	private abortController: AbortController | null = null;
 
 	constructor() {
 		// Auto-start polling when store is created
@@ -25,17 +26,34 @@ class AmpliPiStore {
 	}
 
 	async fetchState() {
+		// Cancel any in-flight request to prevent race conditions
+		if (this.abortController) {
+			this.abortController.abort();
+		}
+		this.abortController = new AbortController();
+		const signal = this.abortController.signal;
+
 		try {
-			const state = await api.getState();
+			const state = await api.getState(signal);
+			// Check if this request was aborted while in-flight
+			if (signal.aborted) {
+				return;
+			}
 			this.updateState(state);
 			this.connected = true;
 			this.error = null;
 		} catch (err) {
+			// Ignore aborted requests
+			if (err instanceof Error && err.name === 'AbortError') {
+				return;
+			}
 			this.connected = false;
 			this.error = err instanceof Error ? err.message : 'Failed to fetch state';
 			console.error('Failed to fetch state:', err);
 		} finally {
-			this.loading = false;
+			if (!signal.aborted) {
+				this.loading = false;
+			}
 		}
 	}
 
@@ -66,6 +84,11 @@ class AmpliPiStore {
 		if (this.pollInterval) {
 			clearInterval(this.pollInterval);
 			this.pollInterval = null;
+		}
+		// Abort any in-flight request
+		if (this.abortController) {
+			this.abortController.abort();
+			this.abortController = null;
 		}
 	}
 

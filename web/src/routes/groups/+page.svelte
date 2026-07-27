@@ -2,10 +2,12 @@
 	import { amplipi } from '$lib/store.svelte';
 	import { api } from '$lib/api';
 	import type { Group, GroupUpdate } from '$lib/types';
+	import { dbToPercent, percentToDb } from '$lib/volume';
 
 	let showCreateDialog = $state(false);
 	let newGroupName = $state('');
 	let selectedZones = $state<number[]>([]);
+	let dialogRef = $state<HTMLDivElement | null>(null);
 
 	async function createGroup() {
 		if (!newGroupName.trim()) return;
@@ -54,15 +56,57 @@
 		}
 	}
 
-	function dbToPercent(db: number, min: number = -79, max: number = 0): number {
-		if (db <= min) return 0;
-		if (db >= max) return 100;
-		return Math.round(((db - min) / (max - min)) * 100);
+	function availableStreams() {
+		return amplipi.streams.filter((stream) => !stream.disabled);
 	}
 
-	function percentToDb(percent: number, min: number = -79, max: number = 0): number {
-		return Math.round(min + (percent / 100) * (max - min));
+	async function handleGroupInputChange(groupId: number, inputValue: string) {
+		if (inputValue === 'none') {
+			// Disconnect from source
+			await api.updateGroup(groupId, { source_id: -1 });
+			return;
+		}
+
+		// Parse stream=<id> format
+		if (inputValue.startsWith('stream=')) {
+			const streamId = parseInt(inputValue.substring(7));
+			const stream = amplipi.getStream(streamId);
+
+			if (!stream) {
+				console.error('Stream not found:', streamId);
+				return;
+			}
+
+			// For RCA streams, the source_id must match the stream's index
+			if (stream.type === 'rca' && stream.config?.index !== undefined) {
+				const sourceId = stream.config.index as number;
+				// First update the source's input
+				await api.updateSource(sourceId, { input: inputValue });
+				// Then assign the group to that source
+				await api.updateGroup(groupId, { source_id: sourceId });
+			} else {
+				// For non-RCA streams, assign to source 0 by default
+				await api.updateSource(0, { input: inputValue });
+				await api.updateGroup(groupId, { source_id: 0 });
+			}
+		}
 	}
+
+	function handleDialogKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') {
+			showCreateDialog = false;
+			newGroupName = '';
+			selectedZones = [];
+		}
+	}
+
+	$effect(() => {
+		if (showCreateDialog && dialogRef) {
+			// Focus the first input when dialog opens
+			const input = dialogRef.querySelector('input');
+			if (input) input.focus();
+		}
+	});
 </script>
 
 <div class="p-4 md:p-6">
@@ -108,15 +152,18 @@
 							class:text-gray-400={group.mute}
 							class:text-blue-600={!group.mute}
 							class:dark:text-blue-400={!group.mute}
+							aria-label={group.mute ? `Unmute ${group.name}` : `Mute ${group.name}`}
+							aria-pressed={!group.mute}
 						>
-							{group.mute ? '🔇' : '🔊'}
+							<span aria-hidden="true">{group.mute ? '🔇' : '🔊'}</span>
 						</button>
 
 						<button
 							onclick={() => deleteGroup(group.id)}
 							class="rounded p-2 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
+							aria-label="Delete group {group.name}"
 						>
-							🗑️
+							<span aria-hidden="true">🗑️</span>
 						</button>
 					</div>
 				</div>
@@ -141,6 +188,11 @@
 								updateGroup(group.id, { vol_f: val });
 							}}
 							class="w-full accent-blue-600"
+							aria-label="Volume for {group.name}"
+							aria-valuemin={0}
+							aria-valuemax={100}
+							aria-valuenow={Math.round((group.vol_f ?? 0) * 100)}
+							aria-valuetext="{Math.round((group.vol_f ?? 0) * 100)} percent"
 						/>
 					</div>
 				{/if}
@@ -159,8 +211,10 @@
 									class:text-gray-400={zone.mute}
 									class:text-blue-600={!zone.mute}
 									class:dark:text-blue-400={!zone.mute}
+									aria-label={zone.mute ? `Unmute ${zone.name}` : `Mute ${zone.name}`}
+									aria-pressed={!zone.mute}
 								>
-									{zone.mute ? '🔇' : '🔊'}
+									<span aria-hidden="true">{zone.mute ? '🔇' : '🔊'}</span>
 								</button>
 							</div>
 
@@ -183,22 +237,31 @@
 										updateZone(zone.id, { vol: db });
 									}}
 									class="w-full accent-blue-600"
+									aria-label="Volume for {zone.name}"
+									aria-valuemin={0}
+									aria-valuemax={100}
+									aria-valuenow={dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}
+									aria-valuetext="{dbToPercent(zone.vol, zone.vol_min, zone.vol_max)} percent"
 								/>
 							</div>
 						</div>
 					{/each}
 				</div>
 
-				<!-- Source selector -->
+				<!-- Stream selector -->
 				<div class="mt-3">
+					<label for="group-stream-{group.id}" class="sr-only">Select input for {group.name}</label>
 					<select
-						value={group.source_id ?? -1}
-						onchange={(e) => updateGroup(group.id, { source_id: parseInt(e.currentTarget.value) })}
+						id="group-stream-{group.id}"
+						value={group.source_id !== undefined && group.source_id >= 0
+							? amplipi.getSource(group.source_id)?.input || 'none'
+							: 'none'}
+						onchange={(e) => handleGroupInputChange(group.id, e.currentTarget.value)}
 						class="w-full rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
 					>
-						<option value={-1}>Select source</option>
-						{#each amplipi.sources as src (src.id)}
-							<option value={src.id}>{src.name}</option>
+						<option value="none">No input</option>
+						{#each availableStreams() as stream (stream.id)}
+							<option value="stream={stream.id}">{stream.name}</option>
 						{/each}
 					</select>
 				</div>
@@ -223,23 +286,32 @@
 
 <!-- Create group dialog -->
 {#if showCreateDialog}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<div
 		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
 		onclick={(e) => {
 			if (e.target === e.currentTarget) showCreateDialog = false;
 		}}
+		onkeydown={handleDialogKeydown}
+		role="dialog"
+		aria-modal="true"
+		aria-labelledby="create-group-title"
+		tabindex="-1"
 	>
 		<div
+			bind:this={dialogRef}
 			class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl dark:bg-gray-800"
 			onclick={(e) => e.stopPropagation()}
 		>
-			<h3 class="mb-4 text-lg font-semibold text-gray-900 dark:text-white">Create Group</h3>
+			<h3 id="create-group-title" class="mb-4 text-lg font-semibold text-gray-900 dark:text-white">Create Group</h3>
 
 			<div class="mb-4">
-				<label class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+				<label for="new-group-name" class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
 					Group Name
 				</label>
 				<input
+					id="new-group-name"
 					type="text"
 					bind:value={newGroupName}
 					placeholder="e.g., Living Room"
@@ -248,17 +320,20 @@
 			</div>
 
 			<div class="mb-4">
-				<label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+				<span id="zone-selection-label" class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
 					Select Zones
-				</label>
-				<div class="max-h-60 space-y-1 overflow-y-auto">
+				</span>
+				<div class="max-h-60 space-y-1 overflow-y-auto" role="group" aria-labelledby="zone-selection-label">
 					{#each amplipi.zones.filter((z) => !z.disabled) as zone (zone.id)}
 						<button
 							onclick={() => toggleZoneSelection(zone.id)}
 							class={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors ${selectedZones.includes(zone.id) ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-300 dark:border-gray-600'}`}
+							role="checkbox"
+							aria-checked={selectedZones.includes(zone.id)}
 						>
 							<div
 								class={`flex h-5 w-5 items-center justify-center rounded border-2 ${selectedZones.includes(zone.id) ? 'border-blue-600 bg-blue-600' : 'border-gray-300 dark:border-gray-600'}`}
+								aria-hidden="true"
 							>
 								{#if selectedZones.includes(zone.id)}
 									<span class="text-white">✓</span>

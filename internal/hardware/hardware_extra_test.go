@@ -193,7 +193,10 @@ func TestSetZoneVolAllSix(t *testing.T) {
 
 	// Read back and verify encoding
 	for i, vol := range vols {
-		reg := hardware.VolZoneReg(i)
+		reg, err := hardware.VolZoneReg(i)
+		if err != nil {
+			t.Fatalf("VolZoneReg(%d): %v", i, err)
+		}
 		got := m.GetReg(0, reg)
 		want := hardware.DBToVolReg(vol)
 		if got != want {
@@ -215,7 +218,11 @@ func TestSetZoneVol_Clamping(t *testing.T) {
 	if err := m.SetZoneVol(ctx, 0, 0, 10); err != nil {
 		t.Fatalf("SetZoneVol: %v", err)
 	}
-	got := m.GetReg(0, hardware.VolZoneReg(0))
+	reg0, err := hardware.VolZoneReg(0)
+	if err != nil {
+		t.Fatalf("VolZoneReg(0): %v", err)
+	}
+	got := m.GetReg(0, reg0)
 	if got != 0 {
 		t.Errorf("vol > 0 register = %d, want 0 (clamped to 0dB)", got)
 	}
@@ -224,7 +231,11 @@ func TestSetZoneVol_Clamping(t *testing.T) {
 	if err := m.SetZoneVol(ctx, 0, 1, -100); err != nil {
 		t.Fatalf("SetZoneVol: %v", err)
 	}
-	got = m.GetReg(0, hardware.VolZoneReg(1))
+	reg1, err := hardware.VolZoneReg(1)
+	if err != nil {
+		t.Fatalf("VolZoneReg(1): %v", err)
+	}
+	got = m.GetReg(0, reg1)
 	if got != 80 {
 		t.Errorf("vol < -80 register = %d, want 80 (clamped to -80dB)", got)
 	}
@@ -490,20 +501,32 @@ func TestReadFanStatus(t *testing.T) {
 }
 
 func TestVolZoneReg(t *testing.T) {
-	tests := []struct {
+	// Test valid zones
+	validTests := []struct {
 		zone int
 		want hardware.Register
 	}{
 		{0, hardware.RegVolZone1},
 		{1, hardware.RegVolZone2},
 		{5, hardware.RegVolZone6},
-		{-1, hardware.RegVolZone1}, // out of range → clamp to Zone1
-		{99, hardware.RegVolZone1}, // out of range → clamp to Zone1
 	}
-	for _, tc := range tests {
-		got := hardware.VolZoneReg(tc.zone)
+	for _, tc := range validTests {
+		got, err := hardware.VolZoneReg(tc.zone)
+		if err != nil {
+			t.Errorf("VolZoneReg(%d) returned error: %v", tc.zone, err)
+			continue
+		}
 		if got != tc.want {
 			t.Errorf("VolZoneReg(%d) = 0x%02X, want 0x%02X", tc.zone, got, tc.want)
+		}
+	}
+
+	// Test invalid zones should return error
+	invalidZones := []int{-1, 6, 99}
+	for _, zone := range invalidZones {
+		_, err := hardware.VolZoneReg(zone)
+		if err == nil {
+			t.Errorf("VolZoneReg(%d) should return error for invalid zone", zone)
 		}
 	}
 }

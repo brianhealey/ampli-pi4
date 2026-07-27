@@ -172,11 +172,12 @@ func (m *Mock) SetZoneVol(ctx context.Context, unit, zone int, vol int) error {
 	if m.failWrite {
 		return ErrHardware("mock: write failure configured")
 	}
-	if zone < 0 || zone > 5 {
-		return ErrHardware("invalid zone index")
+	reg, err := VolZoneReg(zone)
+	if err != nil {
+		return ErrHardware(err.Error())
 	}
 	m.ensureUnit(unit)
-	m.regs[unit][VolZoneReg(zone)] = DBToVolReg(vol)
+	m.regs[unit][reg] = DBToVolReg(vol)
 	return nil
 }
 

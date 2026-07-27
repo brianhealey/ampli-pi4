@@ -31,11 +31,13 @@ class APIError extends Error {
 
 async function request<T>(
 	endpoint: string,
-	options: RequestInit = {}
+	options: RequestInit = {},
+	signal?: AbortSignal
 ): Promise<T> {
 	const url = `${API_BASE}${endpoint}`;
 	const response = await fetch(url, {
 		...options,
+		signal,
 		headers: {
 			'Content-Type': 'application/json',
 			...options.headers
@@ -61,8 +63,8 @@ async function request<T>(
 
 export const api = {
 	// System state
-	getState(): Promise<State> {
-		return request<State>('/');
+	getState(signal?: AbortSignal): Promise<State> {
+		return request<State>('/', {}, signal);
 	},
 
 	// Sources

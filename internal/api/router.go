@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -10,16 +11,23 @@ import (
 
 // NewRouter creates and returns the main HTTP router.
 func NewRouter(ctrl Controller, authSvc *auth.Service, bus EventBus) http.Handler {
+	return NewRouterWithConfig(ctrl, authSvc, bus, "")
+}
+
+// NewRouterWithConfig creates a router with explicit config directory for backup operations.
+func NewRouterWithConfig(ctrl Controller, authSvc *auth.Service, bus EventBus, configDir string) http.Handler {
 	r := chi.NewRouter()
 
 	// Global middleware
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
+	r.Use(securityHeadersMiddleware)
 	r.Use(corsMiddleware)
 	r.Use(middleware.CleanPath)
+	r.Use(maxBytesMiddleware(1 << 20)) // 1MB default limit for JSON bodies
 
-	h := &Handlers{ctrl: ctrl, events: bus}
+	h := &Handlers{ctrl: ctrl, events: bus, auth: authSvc, configDir: configDir}
 
 	// Auth routes (no auth required)
 	r.Group(func(r chi.Router) {
@@ -96,16 +104,135 @@ func NewRouter(ctrl Controller, authSvc *auth.Service, bus EventBus) http.Handle
 	return r
 }
 
-// corsMiddleware adds permissive CORS headers for local network access.
+// corsMiddleware adds CORS headers for local network access.
+// It validates the Origin header against a list of allowed patterns
+// to prevent cross-site request forgery from malicious websites.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, api-key")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
+		origin := r.Header.Get("Origin")
+
+		// Allow requests with no Origin (same-origin requests, curl, etc.)
+		if origin == "" {
+			next.ServeHTTP(w, r)
 			return
+		}
+
+		// Check if origin is allowed
+		if isAllowedOrigin(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Api-Key, Authorization")
+			w.Header().Set("Access-Control-Max-Age", "86400") // Cache preflight for 24 hours
+
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		} else {
+			// For disallowed origins, don't set any CORS headers
+			// The browser will block the response
+			if r.Method == http.MethodOptions {
+				// Reject preflight requests from disallowed origins
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isAllowedOrigin checks if an origin is allowed for CORS.
+// Allowed origins:
+// - localhost with any port (development)
+// - Private network IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+// - .local domains (mDNS/Bonjour names like amplipi.local)
+func isAllowedOrigin(origin string) bool {
+	// Remove protocol prefix for comparison
+	host := origin
+	if strings.HasPrefix(host, "http://") {
+		host = strings.TrimPrefix(host, "http://")
+	} else if strings.HasPrefix(host, "https://") {
+		host = strings.TrimPrefix(host, "https://")
+	}
+
+	// Remove port suffix for hostname checks
+	if colonIdx := strings.LastIndex(host, ":"); colonIdx != -1 {
+		// Be careful with IPv6 addresses
+		if !strings.Contains(host, "[") {
+			host = host[:colonIdx]
+		}
+	}
+
+	// Allow localhost
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+
+	// Allow .local domains (mDNS/Bonjour)
+	if strings.HasSuffix(host, ".local") {
+		return true
+	}
+
+	// Allow private network ranges
+	// 10.0.0.0/8
+	if strings.HasPrefix(host, "10.") {
+		return true
+	}
+
+	// 192.168.0.0/16
+	if strings.HasPrefix(host, "192.168.") {
+		return true
+	}
+
+	// 172.16.0.0/12 (172.16.x.x - 172.31.x.x)
+	if strings.HasPrefix(host, "172.") {
+		parts := strings.Split(host, ".")
+		if len(parts) >= 2 {
+			// Check if second octet is 16-31
+			switch parts[1] {
+			case "16", "17", "18", "19", "20", "21", "22", "23",
+				"24", "25", "26", "27", "28", "29", "30", "31":
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// securityHeadersMiddleware adds security headers to all responses.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Prevent MIME type sniffing
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// Prevent clickjacking
+		w.Header().Set("X-Frame-Options", "DENY")
+		// Control referrer information
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		// Disable caching for API responses (but allow for static assets)
+		if strings.HasPrefix(r.URL.Path, "/api") {
+			w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// maxBytesMiddleware limits request body size to prevent memory exhaustion.
+func maxBytesMiddleware(maxBytes int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Skip limit for multipart form (handled separately in restoreBackup)
+			if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// Limit body size for JSON requests
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

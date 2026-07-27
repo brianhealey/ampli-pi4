@@ -413,7 +413,11 @@ func TestSetStream(t *testing.T) {
 	ctrl := newTestController(t)
 	ctx := context.Background()
 
-	createState, appErr := ctrl.CreateStream(ctx, models.StreamCreate{Name: "MyStream", Type: "internet_radio"})
+	createState, appErr := ctrl.CreateStream(ctx, models.StreamCreate{
+		Name:   "MyStream",
+		Type:   "internet_radio",
+		Config: map[string]interface{}{"url": "http://example.com/stream"},
+	})
 	if appErr != nil {
 		t.Fatalf("CreateStream: %v", appErr)
 	}
@@ -446,7 +450,11 @@ func TestExecStreamCommand_Play(t *testing.T) {
 	ctrl := newTestController(t)
 	ctx := context.Background()
 
-	createState, appErr := ctrl.CreateStream(ctx, models.StreamCreate{Name: "PlayStream", Type: "internet_radio"})
+	createState, appErr := ctrl.CreateStream(ctx, models.StreamCreate{
+		Name:   "PlayStream",
+		Type:   "internet_radio",
+		Config: map[string]interface{}{"url": "http://example.com/stream"},
+	})
 	if appErr != nil {
 		t.Fatalf("CreateStream: %v", appErr)
 	}
@@ -770,7 +778,11 @@ func TestExecStreamCommand_Pause(t *testing.T) {
 	ctrl := newTestController(t)
 	ctx := context.Background()
 
-	createState, appErr := ctrl.CreateStream(ctx, models.StreamCreate{Name: "PauseStream", Type: "internet_radio"})
+	createState, appErr := ctrl.CreateStream(ctx, models.StreamCreate{
+		Name:   "PauseStream",
+		Type:   "internet_radio",
+		Config: map[string]interface{}{"url": "http://example.com/stream"},
+	})
 	if appErr != nil {
 		t.Fatalf("CreateStream: %v", appErr)
 	}
@@ -799,7 +811,11 @@ func TestExecStreamCommand_Stop(t *testing.T) {
 	ctrl := newTestController(t)
 	ctx := context.Background()
 
-	createState, _ := ctrl.CreateStream(ctx, models.StreamCreate{Name: "StopStream", Type: "internet_radio"})
+	createState, _ := ctrl.CreateStream(ctx, models.StreamCreate{
+		Name:   "StopStream",
+		Type:   "internet_radio",
+		Config: map[string]interface{}{"url": "http://example.com/stream"},
+	})
 	var sid int
 	for _, s := range createState.Streams {
 		if s.Name == "StopStream" {
@@ -824,7 +840,11 @@ func TestExecStreamCommand_Unknown(t *testing.T) {
 	ctrl := newTestController(t)
 	ctx := context.Background()
 
-	createState, _ := ctrl.CreateStream(ctx, models.StreamCreate{Name: "CmdStream", Type: "internet_radio"})
+	createState, _ := ctrl.CreateStream(ctx, models.StreamCreate{
+		Name:   "CmdStream",
+		Type:   "internet_radio",
+		Config: map[string]interface{}{"url": "http://example.com/stream"},
+	})
 	var sid int
 	for _, s := range createState.Streams {
 		if s.Name == "CmdStream" {

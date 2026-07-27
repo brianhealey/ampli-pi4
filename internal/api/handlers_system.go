@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/micro-nova/amplipi-go/internal/auth"
 	"github.com/micro-nova/amplipi-go/internal/maintenance"
 	"github.com/micro-nova/amplipi-go/internal/models"
 )
@@ -49,6 +51,9 @@ func (h *Handlers) loginPage(w http.ResponseWriter, r *http.Request) {
 	if next == "" {
 		next = "/api"
 	}
+	// Sanitize the next parameter to prevent XSS
+	safeNext := html.EscapeString(next)
+
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`<!DOCTYPE html>
@@ -57,7 +62,7 @@ func (h *Handlers) loginPage(w http.ResponseWriter, r *http.Request) {
 <body>
 <h2>AmpliPi Login</h2>
 <form method="POST" action="/auth/login">
-  <input type="hidden" name="next" value="` + next + `">
+  <input type="hidden" name="next" value="` + safeNext + `">
   <label>Password: <input type="password" name="password"></label>
   <button type="submit">Login</button>
 </form>
@@ -65,15 +70,82 @@ func (h *Handlers) loginPage(w http.ResponseWriter, r *http.Request) {
 </html>`))
 }
 
-// loginPost handles login form submission.
-// TODO: implement proper credential verification with argon2.
+// loginPost handles login form submission with proper credential verification.
 func (h *Handlers) loginPost(w http.ResponseWriter, r *http.Request) {
-	// For now, redirect to requested URL (auth service handles actual verification).
+	password := r.FormValue("password")
 	next := r.FormValue("next")
-	if next == "" {
-		next = "/api"
+
+	// Validate and sanitize the redirect URL to prevent open redirect
+	next = sanitizeRedirectURL(next)
+
+	// Check if we're in open mode (no password hashes configured)
+	// In open mode, allow any login
+	var accessKey string
+	var ok bool
+	if h.auth.IsOpenMode() {
+		// Open mode - generate a session token
+		var err error
+		accessKey, err = auth.GenerateSessionToken()
+		ok = err == nil
+	} else {
+		// Verify password using argon2
+		accessKey, ok = h.auth.VerifyPassword(password)
 	}
+	if !ok {
+		// Invalid password - show login page with error
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusUnauthorized)
+		safeNext := html.EscapeString(next)
+		_, _ = w.Write([]byte(`<!DOCTYPE html>
+<html>
+<head><title>AmpliPi Login</title></head>
+<body>
+<h2>AmpliPi Login</h2>
+<p style="color: red;">Invalid password. Please try again.</p>
+<form method="POST" action="/auth/login">
+  <input type="hidden" name="next" value="` + safeNext + `">
+  <label>Password: <input type="password" name="password"></label>
+  <button type="submit">Login</button>
+</form>
+</body>
+</html>`))
+		return
+	}
+
+	// Set secure session cookie
+	// Determine if we should set Secure flag (only for HTTPS)
+	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	auth.SetSessionCookie(w, accessKey, secure)
+
 	http.Redirect(w, r, next, http.StatusFound)
+}
+
+// sanitizeRedirectURL ensures the redirect URL is safe (relative path only).
+// Prevents open redirect attacks by rejecting absolute URLs and paths starting with //.
+func sanitizeRedirectURL(next string) string {
+	if next == "" {
+		return "/api"
+	}
+
+	// Reject absolute URLs (http://, https://, //, etc.)
+	if strings.HasPrefix(next, "http://") ||
+		strings.HasPrefix(next, "https://") ||
+		strings.HasPrefix(next, "//") ||
+		strings.Contains(next, "://") {
+		return "/api"
+	}
+
+	// Ensure it starts with /
+	if !strings.HasPrefix(next, "/") {
+		return "/api"
+	}
+
+	// Reject paths that try to include a host via @ or other tricks
+	if strings.Contains(next, "@") {
+		return "/api"
+	}
+
+	return next
 }
 
 // testPreamp runs a quick preamp self-test (read version reg from all units).
@@ -119,7 +191,19 @@ func (h *Handlers) flashFirmware(w http.ResponseWriter, r *http.Request) {
 
 // createBackup triggers an immediate config backup and returns the file path.
 func (h *Handlers) createBackup(w http.ResponseWriter, r *http.Request) {
-	svc := maintenance.New("", nil, nil)
+	configDir := h.configDir
+	if configDir == "" {
+		// Fallback to default config directory
+		home, err := os.UserHomeDir()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+				"error": "cannot determine home directory: " + err.Error(),
+			})
+			return
+		}
+		configDir = filepath.Join(home, ".config", "amplipi")
+	}
+	svc := maintenance.New(configDir, nil, nil)
 	file, err := svc.RunBackupNow()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
@@ -220,8 +304,15 @@ func (h *Handlers) restoreBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 // extractTarGz extracts a .tar.gz archive from r into destDir.
-// Only extracts regular files, with path sanitization to prevent path traversal.
+// Only extracts regular files and directories, with proper path traversal prevention.
+// Preserves directory structure while ensuring all paths stay within destDir.
 func extractTarGz(r io.Reader, destDir string) error {
+	// Get absolute path of destination for security checks
+	absDestDir, err := filepath.Abs(destDir)
+	if err != nil {
+		return fmt.Errorf("cannot resolve destination: %w", err)
+	}
+
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("gzip: %w", err)
@@ -238,13 +329,34 @@ func extractTarGz(r io.Reader, destDir string) error {
 			return fmt.Errorf("tar: %w", err)
 		}
 
-		// Sanitize the path: strip leading slashes and any ".." components
-		cleanName := filepath.Clean(filepath.Base(hdr.Name))
-		if strings.Contains(cleanName, "..") {
-			continue // skip suspicious entries
+		// Skip symlinks and other special file types (security)
+		if hdr.Typeflag == tar.TypeSymlink || hdr.Typeflag == tar.TypeLink {
+			continue
 		}
 
-		dest := filepath.Join(destDir, cleanName)
+		// Clean the path but preserve directory structure
+		cleanName := filepath.Clean(hdr.Name)
+
+		// Remove leading slashes and drive letters
+		cleanName = strings.TrimPrefix(cleanName, "/")
+		cleanName = strings.TrimPrefix(cleanName, "\\")
+
+		// Skip empty names
+		if cleanName == "" || cleanName == "." {
+			continue
+		}
+
+		// Construct the destination path
+		dest := filepath.Join(absDestDir, cleanName)
+
+		// Verify the destination is within destDir (prevent path traversal)
+		absDest, err := filepath.Abs(dest)
+		if err != nil {
+			continue // skip paths we can't resolve
+		}
+		if !strings.HasPrefix(absDest, absDestDir+string(filepath.Separator)) && absDest != absDestDir {
+			continue // skip paths that escape the destination
+		}
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
@@ -252,14 +364,18 @@ func extractTarGz(r io.Reader, destDir string) error {
 				return err
 			}
 		case tar.TypeReg:
+			// Create parent directories if needed
 			if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 				return err
 			}
-			f, err := os.Create(dest)
+			// Create file with restrictive permissions
+			f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(f, tr); err != nil {
+			// Limit copy size to prevent decompression bombs (100MB per file)
+			limitedReader := io.LimitReader(tr, 100<<20)
+			if _, err := io.Copy(f, limitedReader); err != nil {
 				f.Close()
 				return err
 			}

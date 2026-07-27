@@ -82,26 +82,53 @@ const (
 	LastPresetID     = 9999
 )
 
-// VolFToDB converts a float volume [0.0, 1.0] to dB [-80, 0].
+// VolFToDB converts a float volume [0.0, 1.0] to dB using global range [-80, 0].
+// For zone-specific conversion, use VolFToDBRange.
 func VolFToDB(f float64) int {
+	return VolFToDBRange(f, MinVolDB, MaxVolDB)
+}
+
+// VolFToDBRange converts a float volume [0.0, 1.0] to dB within the given range.
+// This matches the legacy Python utils.vol_float_to_db behavior.
+func VolFToDBRange(f float64, volMin, volMax int) int {
 	if f < 0.0 {
 		f = 0.0
 	}
 	if f > 1.0 {
 		f = 1.0
 	}
-	return int(f*float64(MaxVolDB-MinVolDB)) + MinVolDB
+	rangeDB := volMax - volMin
+	volDB := int(f*float64(rangeDB)) + volMin
+	// Clamp to global limits
+	if volDB < MinVolDB {
+		volDB = MinVolDB
+	}
+	if volDB > MaxVolDB {
+		volDB = MaxVolDB
+	}
+	return volDB
 }
 
-// DBToVolF converts a dB volume [-80, 0] to float [0.0, 1.0].
+// DBToVolF converts a dB volume to float [0.0, 1.0] using global range [-80, 0].
+// For zone-specific conversion, use DBToVolFRange.
 func DBToVolF(db int) float64 {
-	if db < MinVolDB {
-		db = MinVolDB
+	return DBToVolFRange(db, MinVolDB, MaxVolDB)
+}
+
+// DBToVolFRange converts a dB volume to float [0.0, 1.0] within the given range.
+// This matches the legacy Python utils.vol_db_to_float behavior.
+func DBToVolFRange(db int, volMin, volMax int) float64 {
+	if db < volMin {
+		db = volMin
 	}
-	if db > MaxVolDB {
-		db = MaxVolDB
+	if db > volMax {
+		db = volMax
 	}
-	return float64(db-MinVolDB) / float64(MaxVolDB-MinVolDB)
+	rangeDB := volMax - volMin
+	if rangeDB == 0 {
+		return 0.0
+	}
+	return float64(db-volMin) / float64(rangeDB)
 }
 
 // ClampVol clamps a volume value to the zone's configured min/max.

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/stores';
+	import { onMount } from 'svelte';
 	import { amplipi } from '$lib/store.svelte';
 
 	let { children } = $props();
@@ -13,8 +14,11 @@
 		{ path: '/streams', label: 'Streams', icon: '🎵' }
 	];
 
-	// Cleanup on unmount
-	$effect(() => {
+	// Use onMount for proper lifecycle management - start polling on mount, cleanup on unmount
+	onMount(() => {
+		// Polling is auto-started in constructor, but ensure it's running
+		amplipi.startPolling();
+
 		return () => {
 			amplipi.stopPolling();
 		};

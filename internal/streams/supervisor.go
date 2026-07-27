@@ -179,11 +179,21 @@ func (s *Supervisor) supervise(ctx context.Context) {
 		case exitErr = <-exitCh:
 		case <-s.stopCh:
 			s.killProcess(pid)
-			<-exitCh
+			// Wait for process exit with timeout to prevent goroutine leak
+			select {
+			case <-exitCh:
+			case <-time.After(10 * time.Second):
+				slog.Error("supervisor: process won't die, leaking wait goroutine", "name", s.name, "pid", pid)
+			}
 			return
 		case <-ctx.Done():
 			s.killProcess(pid)
-			<-exitCh
+			// Wait for process exit with timeout to prevent goroutine leak
+			select {
+			case <-exitCh:
+			case <-time.After(10 * time.Second):
+				slog.Error("supervisor: process won't die, leaking wait goroutine", "name", s.name, "pid", pid)
+			}
 			return
 		}
 

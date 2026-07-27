@@ -35,6 +35,13 @@ func (c *Controller) CreateGroup(ctx context.Context, req models.GroupUpdate) (m
 	}
 
 	state, err := c.apply(func(s *models.State) error {
+		// Validate that all zone IDs exist
+		for _, zid := range req.ZoneIDs {
+			if findZone(s, zid) == nil {
+				return models.ErrBadRequest(fmt.Sprintf("zone %d not found", zid))
+			}
+		}
+
 		g := models.Group{
 			ID:      nextGroupID(s),
 			Name:    *req.Name,
@@ -73,6 +80,12 @@ func (c *Controller) SetGroup(ctx context.Context, id int, upd models.GroupUpdat
 			g.Name = *upd.Name
 		}
 		if upd.ZoneIDs != nil {
+			// Validate that all zone IDs exist
+			for _, zid := range upd.ZoneIDs {
+				if findZone(s, zid) == nil {
+					return models.ErrBadRequest(fmt.Sprintf("zone %d not found", zid))
+				}
+			}
 			g.ZoneIDs = upd.ZoneIDs
 		}
 		if upd.SourceID != nil {

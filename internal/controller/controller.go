@@ -4,7 +4,9 @@ package controller
 
 import (
 	"context"
+	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/micro-nova/amplipi-go/internal/config"
 	"github.com/micro-nova/amplipi-go/internal/events"
@@ -12,6 +14,10 @@ import (
 	"github.com/micro-nova/amplipi-go/internal/models"
 	"github.com/micro-nova/amplipi-go/internal/streams"
 )
+
+// streamSyncCoalesceDelay is how long to wait after a state change before
+// syncing streams. This allows multiple rapid changes to be coalesced.
+const streamSyncCoalesceDelay = 50 * time.Millisecond
 
 // Controller is the central state machine for AmpliPi.
 // All state mutations go through the apply() method which ensures
@@ -24,6 +30,15 @@ type Controller struct {
 	store   config.Store
 	bus     *events.Bus
 	streams *streams.Manager
+
+	// Stream sync coalescing
+	syncMu       sync.Mutex
+	syncPending  bool
+	syncTimer    *time.Timer
+	syncStreams  []models.Stream
+	syncSources  []models.Source
+	syncShutdown chan struct{}
+	syncWg       sync.WaitGroup // Track in-flight sync operations
 }
 
 // New creates and initializes a new Controller.
@@ -37,30 +52,45 @@ func New(hw hardware.Driver, profile *hardware.HardwareProfile, store config.Sto
 	}
 
 	c := &Controller{
-		state:   *state,
-		hw:      hw,
-		profile: profile,
-		store:   store,
-		bus:     bus,
-		streams: mgr,
+		state:        *state,
+		hw:           hw,
+		profile:      profile,
+		store:        store,
+		bus:          bus,
+		streams:      mgr,
+		syncShutdown: make(chan struct{}),
 	}
 
 	// Apply initial state to hardware
 	ctx := context.Background()
 	if err := c.applyStateToHW(ctx, *state); err != nil {
 		// Not fatal — we can run without hardware (mock or debug mode)
-		_ = err
+		slog.Warn("controller: initial hardware sync failed", "err", err)
 	}
 
 	// Sync initial stream state if manager is available
 	if c.streams != nil {
 		if err := c.streams.Sync(ctx, state.Streams, state.Sources); err != nil {
 			// Not fatal — log and continue
-			_ = err
+			slog.Warn("controller: initial stream sync failed", "err", err)
 		}
 	}
 
 	return c, nil
+}
+
+// Shutdown stops the controller and cleans up resources.
+// Blocks until all in-flight sync operations complete.
+func (c *Controller) Shutdown() {
+	close(c.syncShutdown)
+	c.syncMu.Lock()
+	if c.syncTimer != nil {
+		c.syncTimer.Stop()
+	}
+	c.syncMu.Unlock()
+
+	// Wait for any in-flight sync operations to complete
+	c.syncWg.Wait()
 }
 
 // UpdateStreamInfo updates a stream's metadata. Called by the stream Manager
@@ -102,14 +132,9 @@ func (c *Controller) apply(fn func(*models.State) error) (models.State, error) {
 	_ = c.store.Save(&c.state) // debounced, async
 	c.bus.Publish(c.state)
 
-	// Sync stream manager with updated state (non-blocking: runs in background)
+	// Schedule coalesced stream sync (non-blocking)
 	if c.streams != nil {
-		go func(streams_ []models.Stream, sources_ []models.Source) {
-			if err := c.streams.Sync(context.Background(), streams_, sources_); err != nil {
-				// Log but don't fail the apply
-				_ = err
-			}
-		}(next.Streams, next.Sources)
+		c.scheduleStreamSync(next.Streams, next.Sources)
 	}
 
 	return c.state, nil
@@ -242,4 +267,49 @@ func nextPresetID(state *models.State) int {
 		}
 	}
 	return maxID + 1
+}
+
+// scheduleStreamSync schedules a coalesced stream sync.
+// Multiple rapid calls will be coalesced into a single sync operation.
+// This prevents goroutine accumulation during rapid state changes.
+func (c *Controller) scheduleStreamSync(streams []models.Stream, sources []models.Source) {
+	c.syncMu.Lock()
+	defer c.syncMu.Unlock()
+
+	// Store the latest state to sync
+	c.syncStreams = streams
+	c.syncSources = sources
+
+	// If a sync is already pending, the timer will use the latest state
+	if c.syncPending {
+		return
+	}
+
+	c.syncPending = true
+	c.syncWg.Add(1) // Track the pending callback
+	c.syncTimer = time.AfterFunc(streamSyncCoalesceDelay, func() {
+		defer c.syncWg.Done()
+		c.executeStreamSync()
+	})
+}
+
+// executeStreamSync performs the actual stream sync operation.
+func (c *Controller) executeStreamSync() {
+	c.syncMu.Lock()
+	streams := c.syncStreams
+	sources := c.syncSources
+	c.syncPending = false
+	c.syncTimer = nil
+	c.syncMu.Unlock()
+
+	// Check if we're shutting down
+	select {
+	case <-c.syncShutdown:
+		return
+	default:
+	}
+
+	if err := c.streams.Sync(context.Background(), streams, sources); err != nil {
+		slog.Warn("controller: stream sync failed", "err", err)
+	}
 }

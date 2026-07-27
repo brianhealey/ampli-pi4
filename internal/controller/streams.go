@@ -5,7 +5,25 @@ import (
 	"fmt"
 
 	"github.com/micro-nova/amplipi-go/internal/models"
+	"github.com/micro-nova/amplipi-go/internal/streams"
 )
+
+// normalizeStreamType converts stream type aliases to their canonical form.
+// This ensures consistency between user input and hardware profile checks.
+func normalizeStreamType(streamType string) string {
+	switch streamType {
+	case "internetradio":
+		return "internet_radio"
+	case "spotify":
+		return "spotify_connect"
+	case "fmradio":
+		return "fm_radio"
+	case "fileplayer":
+		return "file_player"
+	default:
+		return streamType
+	}
+}
 
 // GetStreams returns all streams.
 func (c *Controller) GetStreams() []models.Stream {
@@ -35,6 +53,19 @@ func (c *Controller) CreateStream(_ context.Context, req models.StreamCreate) (m
 	}
 	if req.Type == "" {
 		return models.State{}, models.ErrBadRequest("stream type is required")
+	}
+
+	// Normalize stream type to canonical form (e.g., "internetradio" -> "internet_radio")
+	req.Type = normalizeStreamType(req.Type)
+
+	// Validate stream name
+	if err := streams.ValidateStreamName(req.Name); err != nil {
+		return models.State{}, models.ErrBadRequest(fmt.Sprintf("invalid stream name: %v", err))
+	}
+
+	// Validate stream-type-specific configuration
+	if err := validateStreamConfig(req.Type, req.Config); err != nil {
+		return models.State{}, models.ErrBadRequest(err.Error())
 	}
 
 	// Reject stream types whose binary isn't installed on this hardware
@@ -67,11 +98,34 @@ func (c *Controller) CreateStream(_ context.Context, req models.StreamCreate) (m
 
 // SetStream updates a stream by ID.
 func (c *Controller) SetStream(_ context.Context, id int, upd models.StreamUpdate) (models.State, *models.AppError) {
+	// Validate name if being updated
+	if upd.Name != nil && *upd.Name != "" {
+		if err := streams.ValidateStreamName(*upd.Name); err != nil {
+			return models.State{}, models.ErrBadRequest(fmt.Sprintf("invalid stream name: %v", err))
+		}
+	}
+
 	state, err := c.apply(func(s *models.State) error {
 		stream := findStream(s, id)
 		if stream == nil {
 			return models.ErrNotFound("stream not found")
 		}
+
+		// Validate config if being updated (check URLs, paths, etc. based on stream type)
+		if upd.Config != nil {
+			// Merge existing config with updates for validation
+			mergedConfig := make(map[string]interface{})
+			for k, v := range stream.Config {
+				mergedConfig[k] = v
+			}
+			for k, v := range upd.Config {
+				mergedConfig[k] = v
+			}
+			if err := validateStreamConfig(stream.Type, mergedConfig); err != nil {
+				return models.ErrBadRequest(err.Error())
+			}
+		}
+
 		if upd.Name != nil {
 			stream.Name = *upd.Name
 		}
@@ -167,4 +221,59 @@ func (c *Controller) ExecStreamCommand(ctx context.Context, id int, cmd string) 
 		return models.State{}, models.ErrInternal(err.Error())
 	}
 	return state, nil
+}
+
+// validateStreamConfig validates configuration values for a given stream type.
+// This provides early validation before the stream is persisted.
+func validateStreamConfig(streamType string, config map[string]interface{}) error {
+	getConfigString := func(key string) string {
+		if config == nil {
+			return ""
+		}
+		if v, ok := config[key]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+		return ""
+	}
+
+	switch streamType {
+	case "internet_radio", "internetradio":
+		u := getConfigString("url")
+		if u == "" {
+			return fmt.Errorf("internet_radio requires a 'url' in config")
+		}
+		if err := streams.ValidateStreamURL(u); err != nil {
+			return fmt.Errorf("invalid URL: %w", err)
+		}
+
+	case "file_player", "fileplayer":
+		path := getConfigString("path")
+		if path == "" {
+			return fmt.Errorf("file_player requires a 'path' in config")
+		}
+		if err := streams.ValidateFilePath(path); err != nil {
+			return fmt.Errorf("invalid path: %w", err)
+		}
+
+	case "fm_radio", "fmradio":
+		freq := getConfigString("freq")
+		if freq == "" {
+			return fmt.Errorf("fm_radio requires a 'freq' in config")
+		}
+		if err := streams.ValidateFrequency(freq); err != nil {
+			return fmt.Errorf("invalid frequency: %w", err)
+		}
+
+	case "lms":
+		server := getConfigString("server")
+		if server != "" {
+			if err := streams.ValidateLMSServer(server); err != nil {
+				return fmt.Errorf("invalid server: %w", err)
+			}
+		}
+	}
+
+	return nil
 }

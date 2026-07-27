@@ -214,10 +214,11 @@ func (d *I2CDriver) SetAmpEnables(ctx context.Context, unit int, enables [6]bool
 }
 
 func (d *I2CDriver) SetZoneVol(ctx context.Context, unit, zone int, vol int) error {
-	if zone < 0 || zone > 5 {
-		return fmt.Errorf("i2c: invalid local zone %d", zone)
+	reg, err := VolZoneReg(zone)
+	if err != nil {
+		return fmt.Errorf("i2c: %w", err)
 	}
-	return d.Write(ctx, unit, VolZoneReg(zone), DBToVolReg(vol))
+	return d.Write(ctx, unit, reg, DBToVolReg(vol))
 }
 
 func (d *I2CDriver) ReadTemps(ctx context.Context, unit int) (Temps, error) {

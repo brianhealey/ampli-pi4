@@ -1,5 +1,7 @@
 package hardware
 
+import "fmt"
+
 // Register addresses matching the STM32 firmware's CmdReg enum in ctrl_i2c.c.
 const (
 	RegSrcAD      Register = 0x00 // Source analog/digital select (1 bit per source, 1=digital)
@@ -126,9 +128,10 @@ func UnpackZone654(b byte) (src4, src5, src6 int) {
 }
 
 // VolZoneReg returns the volume register address for the given zone index (0-based, local to unit).
-func VolZoneReg(localZone int) Register {
+// Returns an error if the zone index is out of bounds.
+func VolZoneReg(localZone int) (Register, error) {
 	if localZone < 0 || localZone > 5 {
-		return RegVolZone1
+		return 0, fmt.Errorf("invalid local zone %d: must be 0-5", localZone)
 	}
-	return Register(RegVolZone1 + byte(localZone))
+	return Register(RegVolZone1 + byte(localZone)), nil
 }

@@ -144,7 +144,7 @@
 								{stream.name}
 								{#if stream.type === 'rca' && stream.config?.index !== undefined}
 									<span class="text-xs text-gray-500 dark:text-gray-400">
-										(Source {stream.config.index + 1})
+										(Source {(stream.config.index as number) + 1})
 									</span>
 								{/if}
 							</h3>

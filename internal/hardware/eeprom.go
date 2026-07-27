@@ -34,15 +34,20 @@ func ReadEEPROMPage(ctx context.Context, drv Driver, unit, page, i2cAddr int) ([
 	// The STM32 handles the EEPROM read asynchronously in its internal I2C loop
 	// (every 8ms at mod8==4), so we may need to wait up to ~12ms.
 	deadline := time.Now().Add(200 * time.Millisecond)
+	readComplete := false
 	for time.Now().Before(deadline) {
 		val, err := drv.Read(ctx, unit, RegEEPROMReq)
 		if err != nil {
 			return [16]byte{}, fmt.Errorf("EEPROM poll: %w", err)
 		}
 		if val&0x01 != 0 {
+			readComplete = true
 			break // read complete — data available in REG_EEPROM_DATA
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	if !readComplete {
+		return [16]byte{}, fmt.Errorf("EEPROM read timeout: completion flag not set within 200ms")
 	}
 
 	// Step 3: Read 16 data bytes from REG_EEPROM_DATA (0x20–0x2F).
