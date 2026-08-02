@@ -170,6 +170,35 @@ func TestCreatePreset(t *testing.T) {
 	}
 }
 
+// newTestControllerWithState builds a controller whose persisted state is `st`,
+// exposing the hardware mock so tests can inspect what startup wrote.
+func newTestControllerWithState(t *testing.T, st models.State) *hardware.Mock {
+	t.Helper()
+	hw := hardware.NewMock()
+	if _, err := controller.New(hw, nil, &memStore{state: &st}, events.NewBus(), nil); err != nil {
+		t.Fatalf("failed to create controller: %v", err)
+	}
+	return hw
+}
+
+// Startup must derive source analog/digital flags from persisted state. Writing
+// a blanket all-digital value leaves RCA/Aux sources silent after every reboot,
+// because nothing re-applies the register until the input is changed by hand.
+func TestStartupMarksRCASourceAnalog(t *testing.T) {
+	st := models.DefaultState()
+	st.Sources[0].Input = "stream=996" // RCA input 1 — an analog passthrough
+
+	hw := newTestControllerWithState(t, st)
+
+	got, err := hw.Read(context.Background(), 0, hardware.RegSrcAD)
+	if err != nil {
+		t.Fatalf("read RegSrcAD: %v", err)
+	}
+	if got&0x01 != 0 {
+		t.Errorf("source 0 on an RCA stream should be analog: RegSrcAD = 0b%04b, want bit 0 clear", got)
+	}
+}
+
 func TestFactoryReset(t *testing.T) {
 	ctrl := newTestController(t)
 	ctx := context.Background()

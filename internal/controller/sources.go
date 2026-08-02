@@ -99,8 +99,11 @@ func (c *Controller) SetSource(ctx context.Context, id int, upd models.SourceUpd
 	return state, nil
 }
 
-// updateSourceTypeHW updates the hardware source type (analog/digital) registers.
-func (c *Controller) updateSourceTypeHW(ctx context.Context, state *models.State, _ int) error {
+// sourceAnalogFlags derives the per-source analog/digital flags from state.
+// Index is the source ID; true means analog (RCA/Aux passthrough).
+// This is the single source of truth for the RegSrcAD register contents — both
+// startup and runtime input changes must derive the flags the same way.
+func sourceAnalogFlags(state *models.State) [4]bool {
 	var analog [4]bool
 	for i := range state.Sources {
 		src := &state.Sources[i]
@@ -108,6 +111,12 @@ func (c *Controller) updateSourceTypeHW(ctx context.Context, state *models.State
 			analog[src.ID] = isAnalogInput(src.Input, state)
 		}
 	}
+	return analog
+}
+
+// updateSourceTypeHW updates the hardware source type (analog/digital) registers.
+func (c *Controller) updateSourceTypeHW(ctx context.Context, state *models.State, _ int) error {
+	analog := sourceAnalogFlags(state)
 	for _, unit := range c.hw.Units() {
 		if err := c.hw.SetSourceTypes(ctx, unit, analog); err != nil {
 			return err

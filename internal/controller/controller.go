@@ -143,10 +143,9 @@ func (c *Controller) apply(fn func(*models.State) error) (models.State, error) {
 // applyStateToHW writes the complete state to the hardware driver.
 // Called at startup and after factory reset.
 func (c *Controller) applyStateToHW(ctx context.Context, state models.State) error {
+	analog := sourceAnalogFlags(&state)
+
 	for _, unit := range c.hw.Units() {
-		// Determine source types (analog/digital) for this unit
-		// For simplicity, assume all sources are digital initially
-		var analog [4]bool // false = digital
 		if err := c.hw.SetSourceTypes(ctx, unit, analog); err != nil {
 			return err
 		}
