@@ -17,5 +17,13 @@ SyslogIdentifier=amplipi
 # Allow binding to privileged ports (< 1024) as non-root user
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 
+# Let alsaloop acquire SCHED_RR real-time scheduling. alsaloop hardcodes
+# sched_get_priority_max(SCHED_RR) = 99, so the limit must be 99 or it logs
+# "Scheduler set to Round Robin with priority 99 FAILED!" and runs SCHED_OTHER,
+# which risks xruns on the source→DAC copy. Inherited by child processes.
+# PAM limits.d does not apply to systemd units, so this must live here.
+# Kernel RT throttling (sched_rt_runtime_us) still caps RT tasks at 95% of CPU.
+LimitRTPRIO=99
+
 [Install]
 WantedBy=multi-user.target
