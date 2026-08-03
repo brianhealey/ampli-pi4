@@ -65,9 +65,13 @@ boot_add "core_freq_min=400"
 #     SPI0 only: SCLK=GPIO11, MOSI=GPIO10, MISO=GPIO9, CE0=GPIO8, DC=GPIO25
 #
 #   "carrier-board" → AmpliPi CM3+/CM4S carrier board
-#     SPI1: SCLK=GPIO21, MOSI=GPIO20, MISO=GPIO19, CE0=GPIO18, CE1=GPIO17, DC=GPIO39
+#     SPI1: peak-detect ADC on the preamp board
+#           SCLK=GPIO21, MOSI=GPIO20, MISO=GPIO19, CE0=GPIO18, CE1=GPIO17
 #           (GPIO18-21 are free because i2s-gpio28-31 moved I2S to GPIO28-31)
-#     SPI2: eInk Waveshare 2.13" (CE1, bus=2 device=1) — CM3+ only, not CM4S
+#     J16 front panel display — GPIO40-45, per controller_board_3a.pdf:
+#           MISO=GPIO40, MOSI=GPIO41, SCLK=GPIO42, TFT CE=GPIO44, touch CE=GPIO45,
+#           DC=GPIO39, RESET=GPIO38, backlight=PWM0/GPIO12
+#           CM3+ reaches these as SPI2; CM4S as SPI0 (see the branch below)
 
 step "SPI configuration (detected mode: $DISPLAY_MODE)"
 
@@ -79,15 +83,24 @@ if [[ "$DISPLAY_MODE" == "carrier-board" ]]; then
     boot_replace "dtoverlay=spi1-" "dtoverlay=spi1-2cs"
 
     if [[ "$PI_MODEL" == "Pi CM4S" ]]; then
-        # BCM2711 (CM4S) has no SPI2 on GPIO40-45.
-        # (GPIO40-44 ALT3 = SPI0, not SPI2; spi2-2cs overlay fails probe.)
-        # eInk display (Waveshare 2.13") uses spidev.open(2,1) → will not work on CM4S.
-        # TFT display (SPI1) is unaffected.
-        warn "CM4S detected: skipping spi2-2cs (BCM2711 has no SPI2 on GPIO40-45)"
-        warn "eInk display will NOT work on CM4S. TFT display (SPI1) is unaffected."
-        record_skip "spi2-2cs (CM4S/BCM2711 incompatible — SPI0 is on GPIO40-44 ALT3, not SPI2)"
+        # The front panel display (J16) is wired to GPIO40-45. On BCM2837 those
+        # pins are SPI2 in ALT4, which is what the board was designed against.
+        # On BCM2711 the same ALT4 is SPI0:
+        #   GPIO40=SPI0_MISO  41=SPI0_MOSI  42=SPI0_SCLK  44=SPI0_CE1_N
+        # so spi2-2cs binds a controller whose signals never reach the header —
+        # it claims GPIO43/44 as plain GPIOs and drives no clock or data. That
+        # is why the panel showed a white screen with a working backlight.
+        #
+        # Instead: route SPI0 onto the display pins and relocate its CS1 to
+        # GPIO44 (J16 pin 2). SPI0 keeps its normal GPIO7-11 group as well;
+        # both are driven, which is harmless because only the asserted chip
+        # select decides who listens.
+        boot_remove "dtoverlay=spi2-2cs"
+        boot_replace "dtoverlay=spi0-2cs" "dtoverlay=spi0-2cs,cs1_pin=44"
+        boot_add "gpio=40,41,42=a4"
+        log "CM4S: front panel TFT on SPI0 (CS1→GPIO44, data on GPIO40-42 ALT4)"
     else
-        boot_add "dtoverlay=spi2-2cs"   # eInk on SPI2, CE1 — CM3+ only
+        boot_add "dtoverlay=spi2-2cs"   # TFT + eInk on SPI2, CE1/CE2 — CM3+ only
         log "Carrier-board SPI overlays added (SPI1 + SPI2)"
     fi
 else

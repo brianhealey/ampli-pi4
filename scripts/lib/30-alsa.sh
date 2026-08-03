@@ -51,8 +51,12 @@ fi
 
 # ── Reload snd-aloop if it's already loaded and options changed ───────────────
 if lsmod | grep -q "^snd_aloop"; then
-    # Check if the current card names match what we need
-    if ! aplay -l 2>/dev/null | grep -q "Loopback_1"; then
+    # Check if the current card names match what we need.
+    # The kernel strips underscores from card IDs (see the modprobe note above),
+    # so the card is "Loopback1", not "Loopback_1" — grepping for the latter
+    # never matched, and every setup run tried to unload a module that is in
+    # use by the running streams.
+    if ! aplay -l 2>/dev/null | grep -q "Loopback1"; then
         log "snd-aloop loaded but wrong config — reloading"
         modprobe -r snd-aloop 2>/dev/null || warn "could not remove snd-aloop (in use?)"
         modprobe snd-aloop || warn "modprobe snd-aloop failed"

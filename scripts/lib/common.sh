@@ -59,10 +59,21 @@ PI_MODEL=""
 # DISPLAY_MODE controls which SPI bus + GPIO pins the display uses:
 #   "test-board"    — SPI0 (GPIO10/11/9, CE0=GPIO8, DC=GPIO25)
 #                     Use this for Pi 4 / Pi 3 / Pi 5 on a standard 40-pin header.
-#   "carrier-board" — SPI1 (GPIO20/21/19, CE=GPIO44, DC=GPIO39) + SPI2 for eInk
-#                     Use this for the original AmpliPi CM3+ carrier board.
+#   "carrier-board" — the AmpliPi CM3+/CM4S carrier board.
+#                     Front panel TFT is on J16, which the controller schematic
+#                     wires to GPIO40-45: MOSI=41, SCLK=42, MISO=40, CE1=44,
+#                     plus DC=GPIO39, RESET=GPIO38, backlight=PWM0/GPIO12.
 # Set by check_pi() from device-tree model; can be overridden by env var.
 DISPLAY_MODE="${AMPLIPI_DISPLAY_MODE:-}"
+
+# DISPLAY_SPI_DEV is the spidev node the front-panel TFT answers on.
+# GPIO40-45 carry the display on both compute modules, but the alt-function
+# behind those pins differs, so the controller — and therefore the device
+# node — is not the same:
+#   CM3+ (BCM2837): GPIO40-45 ALT4 = SPI2  → /dev/spidev2.1 (CE1 = GPIO44)
+#   CM4S (BCM2711): GPIO40-45 ALT4 = SPI0  → /dev/spidev0.1 (CE1 relocated to GPIO44)
+# Set by check_pi(); can be overridden by env var.
+DISPLAY_SPI_DEV="${AMPLIPI_DISPLAY_SPI_DEV:-}"
 
 check_pi() {
     ARCH="$(uname -m)"
@@ -90,24 +101,33 @@ check_pi() {
 
     # Derive DISPLAY_MODE from Pi model (unless already set by environment)
     #
-    # carrier-board: AmpliPi original carrier (SODIMM GPIO44 as CE, SPI1 for TFT, SPI2 for eInk)
-    #   CM3+  (BCM2837): SPI1=GPIO18-21 alt4, SPI2=GPIO40-45 alt4 — both work
-    #   CM4S  (BCM2711): SPI1=GPIO18-21 alt4 (same!), SPI2=NOT on GPIO40-45 (eInk broken)
-    #     NOTE: On CM4S the eInk display (spi2-2cs) does not work — BCM2711 has no SPI2
-    #     routing on GPIO40-45. Alt3 on GPIO40-44 maps to SPI0, not SPI2.
-    #     If eInk is needed on CM4S, a different SPI bus + overlay is required.
+    # carrier-board: AmpliPi CM3+/CM4S carrier. The front panel TFT hangs off
+    #   J16, wired to GPIO40-45 (see controller_board_3a.pdf). The pins are the
+    #   same on both modules; the alt-function behind them is not:
+    #     CM3+ (BCM2837): GPIO40-45 ALT4 = SPI2  → the spi2-2cs overlay is correct
+    #     CM4S (BCM2711): GPIO40-45 ALT4 = SPI0  → spi2-2cs binds a controller
+    #       whose pins go nowhere. SPI0 must be routed onto GPIO40-42 instead,
+    #       with CS1 relocated to GPIO44. See 20-hardware.sh.
     #
     # test-board: standard 40-pin header (SPI0, GPIO7-11, CE0=GPIO8, DC=GPIO25)
     if [[ -z "$DISPLAY_MODE" ]]; then
         case "$PI_MODEL" in
             "Pi CM3"|"Pi CM4S")
-                # AmpliPi SODIMM carrier board — SPI1 + GPIO44 CE
                 DISPLAY_MODE="carrier-board"
                 ;;
             *)
                 # Pi 4 / Pi 3 / Pi 5 / unknown — standard 40-pin header, SPI0
                 DISPLAY_MODE="test-board"
                 ;;
+        esac
+    fi
+
+    # Derive the TFT's spidev node from the module (see DISPLAY_SPI_DEV above)
+    if [[ -z "$DISPLAY_SPI_DEV" ]]; then
+        case "$PI_MODEL" in
+            "Pi CM3")  DISPLAY_SPI_DEV="/dev/spidev2.1" ;;  # SPI2 CE1 = GPIO44
+            "Pi CM4S") DISPLAY_SPI_DEV="/dev/spidev0.1" ;;  # SPI0 CE1 → GPIO44
+            *)         DISPLAY_SPI_DEV="/dev/spidev0.0" ;;  # 40-pin header
         esac
     fi
 
@@ -126,7 +146,7 @@ check_pi() {
             ;;
     esac
 
-    log "Platform: $PI_MODEL | Arch: $ARCH | Cores: $CORES | DisplayMode: $DISPLAY_MODE"
+    log "Platform: $PI_MODEL | Arch: $ARCH | Cores: $CORES | DisplayMode: $DISPLAY_MODE | DisplaySPI: $DISPLAY_SPI_DEV"
     log "MARCH_FLAGS: $MARCH_FLAGS"
 }
 
@@ -154,6 +174,25 @@ boot_add() {
     fi
     echo "$line" >> "$(boot_config)"
     log "boot config: added '$line'"
+    REBOOT_NEEDED=1
+}
+
+# boot_remove <prefix>  — delete any line matching prefix from the boot config.
+# boot_add only ever appends, so a line added by an earlier setup run survives
+# even after the condition that added it stops holding. Use this when hardware
+# detection concludes a previously-added line is wrong for this machine —
+# otherwise an upgraded install and a clean install end up configured
+# differently. Sets REBOOT_NEEDED=1 only if something was actually removed.
+boot_remove() {
+    local prefix="$1"
+    local cfg
+    cfg="$(boot_config)"
+    if ! grep -qF "$prefix" "$cfg" 2>/dev/null; then
+        skip "boot config: '$prefix' already absent"
+        return 0
+    fi
+    sed -i "\|^${prefix}|d" "$cfg"
+    log "boot config: removed '${prefix}...'"
     REBOOT_NEEDED=1
 }
 

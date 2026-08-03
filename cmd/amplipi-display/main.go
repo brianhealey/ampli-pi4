@@ -57,8 +57,10 @@ func main() {
 		addr       = flag.String("addr", "localhost", "AmpliPi API address")
 		updateRate = flag.Int("update-rate", 1, "Display update rate in seconds")
 		logLevel   = flag.String("log-level", "info", "Log level (debug, info, warn, error)")
+		spiDev     = flag.String("spi-device", "/dev/spidev0.0", "spidev node the TFT is wired to")
 	)
 	flag.Parse()
+	tftSPIDevice = *spiDev
 
 	// Configure logging
 	level := slog.LevelInfo
@@ -320,12 +322,16 @@ func render(status *Status, displayType string) error {
 // Global TFT instance
 var tftDisplay *TFT
 
+// tftSPIDevice is the spidev node the panel is wired to, set from --spi-device.
+// It varies by compute module — see NewTFT.
+var tftSPIDevice = "/dev/spidev0.0"
+
 // renderTFT renders status to the TFT display.
 func renderTFT(status *Status) error {
 	// Initialize TFT on first call
 	if tftDisplay == nil {
 		var err error
-		tftDisplay, err = NewTFT()
+		tftDisplay, err = NewTFT(tftSPIDevice)
 		if err != nil {
 			// If TFT init fails, log and continue (fall back to log-only mode)
 			slog.Warn("TFT init failed, falling back to log-only mode", "err", err)

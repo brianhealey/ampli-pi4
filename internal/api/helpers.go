@@ -8,7 +8,9 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/micro-nova/amplipi-go/internal/logs"
 	"github.com/micro-nova/amplipi-go/internal/models"
+	"github.com/micro-nova/amplipi-go/internal/system"
 )
 
 // AuthService defines the authentication interface used by handlers.
@@ -22,7 +24,15 @@ type Handlers struct {
 	ctrl      Controller
 	events    EventBus
 	auth      AuthService
-	configDir string // config directory for backup/restore operations
+	configDir string            // config directory for backup/restore operations
+	system    *system.Collector // device health telemetry; nil disables /api/system/stats
+	logs      *logs.Service     // log reader; nil disables /api/system/logs
+}
+
+// HardwareStatusProvider is the optional diagnostics capability of a Controller.
+// It is kept separate from Controller so test doubles need not implement it.
+type HardwareStatusProvider interface {
+	HardwareStatus(ctx context.Context) models.HardwareStatus
 }
 
 // Controller is the interface the handlers use to interact with the system state.

@@ -46,18 +46,22 @@ const (
 	displayHeight = 240
 )
 
-// NewTFT initializes the TFT display.
-func NewTFT() (*TFT, error) {
+// NewTFT initializes the TFT display on the given spidev node.
+//
+// The node is a parameter rather than a constant because the front panel
+// connector (J16) is wired to GPIO40-45 on the carrier board, and the SPI
+// controller behind those pins depends on the compute module: SPI2 on a CM3+
+// (BCM2837), SPI0 on a CM4S (BCM2711). setup.sh resolves it and passes it via
+// --spi-device.
+func NewTFT(spiDevice string) (*TFT, error) {
 	// Initialize periph.io
 	if _, err := host.Init(); err != nil {
 		return nil, fmt.Errorf("periph.io init: %w", err)
 	}
 
-	// Open SPI device (SPI1 on CM4S carrier board)
-	// The TFT is on SPI1, CS0 which is /dev/spidev1.0
-	port, err := spireg.Open("/dev/spidev1.0")
+	port, err := spireg.Open(spiDevice)
 	if err != nil {
-		return nil, fmt.Errorf("open SPI: %w", err)
+		return nil, fmt.Errorf("open SPI %s: %w", spiDevice, err)
 	}
 
 	// Connect to SPI device with proper speed
@@ -66,14 +70,16 @@ func NewTFT() (*TFT, error) {
 		return nil, fmt.Errorf("connect SPI: %w", err)
 	}
 
-	// Get GPIO pins
-	// DC (Data/Command) pin - GPIO39
+	// Get GPIO pins — J16 pin 3
 	dc := gpioreg.ByName("GPIO39")
 	if dc == nil {
 		return nil, fmt.Errorf("failed to open GPIO39 (DC pin)")
 	}
 
-	// Backlight pin - GPIO12
+	// J16 pin 8 (GPIO38) is the touch controller IRQ and pin 7 (GPIO45) its
+	// chip select — neither is claimed here; the panel has no reset line.
+
+	// Backlight pin — J16 pin 9 (PWM0)
 	backlight := gpioreg.ByName("GPIO12")
 	if backlight == nil {
 		return nil, fmt.Errorf("failed to open GPIO12 (backlight pin)")
@@ -87,6 +93,8 @@ func NewTFT() (*TFT, error) {
 		height:    displayHeight,
 		img:       image.NewRGBA(image.Rect(0, 0, displayWidth, displayHeight)),
 	}
+
+	slog.Info("TFT: opened", "spi", spiDevice, "dc", "GPIO39", "backlight", "GPIO12")
 
 	// Initialize display
 	if err := tft.init(); err != nil {
@@ -105,6 +113,11 @@ func (t *TFT) init() error {
 		return fmt.Errorf("set backlight: %w", err)
 	}
 
+	// No hardware reset: J16 has no reset line. GPIO38 is the touch
+	// controller's IRQ (input, pull-up) — the Python driver passes rst=None
+	// and relies on the software reset below. Driving GPIO38 as an output
+	// fights the touch controller.
+	//
 	// Software reset
 	if err := t.writeCommand(cmdSWRESET); err != nil {
 		return err
@@ -131,9 +144,14 @@ func (t *TFT) init() error {
 		return err
 	}
 
-	// Memory access control (MADCTL): 0x48 for default orientation
-	// This matches Python adafruit library
-	if err := t.writeCommand(cmdMADCTL, 0x48); err != nil {
+	// Memory access control (MADCTL) = MV only: landscape, matching the
+	// 320x240 buffer above, with the panel the right way up as mounted in
+	// the AmpliPi front panel. Setting MY|MX as well (0xE0) renders it
+	// rotated 180°.
+	//
+	// The BGR bit (0x08) is deliberately clear. This panel is RGB-wired, so
+	// setting it swaps red and blue.
+	if err := t.writeCommand(cmdMADCTL, 0x20); err != nil {
 		return err
 	}
 
@@ -259,12 +277,11 @@ func (t *TFT) Display() error {
 			g8 := uint8(g >> 8)
 			b8 := uint8(b >> 8)
 
-			// Convert to RGB565 format (5 bits red, 6 bits green, 5 bits blue)
-			rgb565 := uint16((r8&0xF8)<<8) | uint16((g8&0xFC)<<3) | uint16(b8>>3)
+			px := rgb565(r8, g8, b8)
 
 			// Big-endian (MSB first) - matches Python ">H" format
-			buf[i] = byte(rgb565 >> 8)
-			buf[i+1] = byte(rgb565)
+			buf[i] = byte(px >> 8)
+			buf[i+1] = byte(px)
 			pixelIdx++
 		}
 
@@ -299,35 +316,6 @@ func (t *TFT) DrawText(x, y int, text string, col color.Color) {
 func (t *TFT) RenderStatus(status *Status) error {
 	slog.Debug("Rendering TFT display", "zones", len(status.Zones), "sources", len(status.Sources))
 
-	// TEST: Try different MADCTL values for rotation=270
-	// Python uses rotation=270, which could be:
-	// 0x20 (MV), 0xE8 (MY|MX|MV|BGR), 0xA8, etc.
-	// Let's try 0xE8 first
-	if err := t.writeCommand(cmdMADCTL, 0xE8); err != nil {
-		return err
-	}
-	slog.Info("TFT: Set MADCTL to 0xE8 for rotation=270")
-
-	// TEST: Fill with simple pattern: red on left half, blue on right half
-	for y := 0; y < t.height; y++ {
-		for x := 0; x < t.width; x++ {
-			if x < t.width/2 {
-				t.img.Set(x, y, color.RGBA{255, 0, 0, 255}) // Red left
-			} else {
-				t.img.Set(x, y, color.RGBA{0, 0, 255, 255}) // Blue right
-			}
-		}
-	}
-
-	// Display the buffer and return early for testing
-	if err := t.Display(); err != nil {
-		return err
-	}
-	slog.Info("TFT test pattern: red left, blue right")
-	return nil
-
-	// TODO: Remove test pattern code above and uncomment below when working
-	/*
 	// Clear to black
 	t.Clear(color.Black)
 
@@ -414,7 +402,6 @@ func (t *TFT) RenderStatus(status *Status) error {
 
 	slog.Debug("TFT display render complete")
 	return nil
-	*/
 }
 
 // gradientColor returns a color based on percentage (green->yellow->red).

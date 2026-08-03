@@ -5,7 +5,9 @@
 set -euo pipefail
 
 # Deployment configuration
-INSTALL_DIR="/home/pi/amplipi-go"
+# Must match ExecStart in scripts/configs/amplipi.service, and where
+# scripts/lib/70-amplipi.sh installs the binary during setup.
+INSTALL_DIR="/usr/local/bin"
 BINARY_NAME="amplipi"
 SYSTEMD_SERVICE="amplipi.service"
 
@@ -30,12 +32,12 @@ echo "Stopping $SYSTEMD_SERVICE..."
 sudo systemctl stop "$SYSTEMD_SERVICE" || true
 
 # Create installation directory
-mkdir -p "$INSTALL_DIR"
+sudo mkdir -p "$INSTALL_DIR"
 
 # Copy binary
 echo "Installing binary to $INSTALL_DIR/$BINARY_NAME..."
-cp "$BINARY_SRC" "$INSTALL_DIR/$BINARY_NAME"
-chmod +x "$INSTALL_DIR/$BINARY_NAME"
+sudo cp "$BINARY_SRC" "$INSTALL_DIR/$BINARY_NAME"
+sudo chmod +x "$INSTALL_DIR/$BINARY_NAME"
 
 # Update systemd service if scripts/configs/amplipi.service exists
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

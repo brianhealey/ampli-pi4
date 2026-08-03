@@ -11,7 +11,9 @@
 		{ path: '/', label: 'Home', icon: '🏠' },
 		{ path: '/zones', label: 'Zones', icon: '🔊' },
 		{ path: '/groups', label: 'Groups', icon: '👥' },
-		{ path: '/streams', label: 'Streams', icon: '🎵' }
+		{ path: '/streams', label: 'Streams', icon: '🎵' },
+		{ path: '/about', label: 'About', icon: '📊' },
+		{ path: '/logs', label: 'Logs', icon: '📋' }
 	];
 
 	// Use onMount for proper lifecycle management - start polling on mount, cleanup on unmount

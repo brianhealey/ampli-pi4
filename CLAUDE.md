@@ -31,25 +31,16 @@ make deploy-run        # Deploy and restart service
 make deploy-logs       # Tail systemd journal
 ```
 
-## Architecture
+## Architecture Notes
 
-### Backend (Go 1.26.0)
-- **cmd/amplipi/main.go**: Server bootstrap, embedding, graceful shutdown
-- **internal/controller/**: Central state machine - ALL state mutations go through `apply()` method
-- **internal/api/**: Chi HTTP router and REST handlers
-- **internal/hardware/**: Hardware abstraction layer (I2C + mock implementations)
-- **internal/models/**: Data structures (JSON-compatible with Python daemon)
-- **internal/config/**: Atomic JSON persistence with 500ms debounce
-- **internal/events/**: Pub-sub event bus for SSE delivery
-- **internal/streams/**: Stream subprocess management (14 stream types)
-- **internal/auth/**: Cookie/API-key authentication
+Layout and dependencies are discoverable from the tree and manifests. The
+non-obvious parts:
 
-### Frontend (Svelte 5 + SvelteKit)
-- **web/src/lib/store.svelte.ts**: Singleton store using Svelte 5 Runes (`$state`, `$derived`)
-- **web/src/lib/api.ts**: Promise-based fetch wrapper
-- **web/src/routes/**: SvelteKit pages (home, zones, groups, streams)
-- Uses Tailwind CSS 4.1, TypeScript strict mode
-- Polls state every 2 seconds via `startPolling()`
+- `internal/config/` persists atomically with a **500ms debounce** — writes are
+  coalesced, so a config change is not on disk the instant `apply()` returns.
+- `internal/streams/` supervises **14 stream types** as subprocesses.
+- The web UI polls `GET /api` every **2 seconds** (`startPolling()`); there is
+  also an SSE endpoint at `/api/subscribe`.
 
 ## Key Patterns
 
@@ -97,18 +88,7 @@ func (d *I2C) SetZoneVol(ctx context.Context, unit, zone int, vol int) error
 - **Stream metadata**: `~/.config/amplipi/srcs/`
 - **systemd service**: `/etc/systemd/system/amplipi.service`
 
-## CLI Flags
+Run `./bin/amplipi --help` for the current CLI flags.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--mock` | false | Use mock hardware driver |
-| `--addr` | `:80` | HTTP listen address |
-| `--config-dir` | `~/.config/amplipi` | Config directory |
-| `--debug` | false | Enable debug logging |
-
-## Svelte MCP Tools (web/ directory)
-
-When working on the frontend, use these MCP tools:
-- **list-sections**: Discover Svelte 5/SvelteKit documentation
-- **get-documentation**: Fetch relevant docs
-- **svelte-autofixer**: Analyze Svelte code for issues before writing
+Frontend guidance lives in `web/CLAUDE.md`, which loads automatically when
+working under `web/`.

@@ -7,7 +7,20 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/micro-nova/amplipi-go/internal/auth"
+	"github.com/micro-nova/amplipi-go/internal/logs"
+	"github.com/micro-nova/amplipi-go/internal/system"
 )
+
+// Options collects the dependencies of the HTTP router. Only Controller, Auth
+// and Bus are required; the diagnostics fields disable their endpoints when nil.
+type Options struct {
+	Controller Controller
+	Auth       *auth.Service
+	Bus        EventBus
+	ConfigDir  string            // config directory for backup operations
+	System     *system.Collector // device health telemetry
+	Logs       *logs.Service     // log reader
+}
 
 // NewRouter creates and returns the main HTTP router.
 func NewRouter(ctrl Controller, authSvc *auth.Service, bus EventBus) http.Handler {
@@ -16,6 +29,17 @@ func NewRouter(ctrl Controller, authSvc *auth.Service, bus EventBus) http.Handle
 
 // NewRouterWithConfig creates a router with explicit config directory for backup operations.
 func NewRouterWithConfig(ctrl Controller, authSvc *auth.Service, bus EventBus, configDir string) http.Handler {
+	return NewRouterWithOptions(Options{
+		Controller: ctrl,
+		Auth:       authSvc,
+		Bus:        bus,
+		ConfigDir:  configDir,
+	})
+}
+
+// NewRouterWithOptions creates a router from an explicit dependency set.
+func NewRouterWithOptions(opts Options) http.Handler {
+	ctrl, authSvc, bus, configDir := opts.Controller, opts.Auth, opts.Bus, opts.ConfigDir
 	r := chi.NewRouter()
 
 	// Global middleware
@@ -27,7 +51,14 @@ func NewRouterWithConfig(ctrl Controller, authSvc *auth.Service, bus EventBus, c
 	r.Use(middleware.CleanPath)
 	r.Use(maxBytesMiddleware(1 << 20)) // 1MB default limit for JSON bodies
 
-	h := &Handlers{ctrl: ctrl, events: bus, auth: authSvc, configDir: configDir}
+	h := &Handlers{
+		ctrl:      ctrl,
+		events:    bus,
+		auth:      authSvc,
+		configDir: configDir,
+		system:    opts.System,
+		logs:      opts.Logs,
+	}
 
 	// Auth routes (no auth required)
 	r.Group(func(r chi.Router) {
@@ -84,6 +115,12 @@ func NewRouterWithConfig(ctrl Controller, authSvc *auth.Service, bus EventBus, c
 		r.Get("/api/info", h.getInfo)
 		r.Post("/api/factory_reset", h.factoryReset)
 		r.Post("/api/load", h.loadConfig)
+
+		// Diagnostics
+		r.Get("/api/system/stats", h.getSystemStats)
+		r.Get("/api/system/hardware", h.getHardwareStatus)
+		r.Get("/api/system/logs", h.getLogs)
+		r.Get("/api/system/logs/sources", h.getLogSources)
 
 		// Hardware tests
 		r.Post("/api/test/preamp", h.testPreamp)

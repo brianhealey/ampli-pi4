@@ -15,6 +15,14 @@ import type {
 	PresetCreate,
 	PresetUpdate
 } from './types';
+import type {
+	SystemStats,
+	HardwareStatus,
+	LogResult,
+	LogSource,
+	LogQuery,
+	DaemonInfo
+} from './diagnostics';
 
 const API_BASE = '/api';
 
@@ -205,14 +213,37 @@ export const api = {
 		});
 	},
 
-	// System
-	getInfo(): Promise<{ info: any }> {
-		return request('/info');
+	// System. Note this returns the computed Info directly, unlike GET /api
+	// which nests the persisted (and version-less) info block inside State.
+	getInfo(): Promise<DaemonInfo> {
+		return request<DaemonInfo>('/info');
 	},
 
 	factoryReset(): Promise<State> {
 		return request<State>('/factory_reset', {
 			method: 'POST'
 		});
+	},
+
+	// Diagnostics
+	getSystemStats(signal?: AbortSignal): Promise<SystemStats> {
+		return request<SystemStats>('/system/stats', {}, signal);
+	},
+
+	getHardwareStatus(signal?: AbortSignal): Promise<HardwareStatus> {
+		return request<HardwareStatus>('/system/hardware', {}, signal);
+	},
+
+	getLogSources(): Promise<{ sources: LogSource[] }> {
+		return request('/system/logs/sources');
+	},
+
+	getLogs(query: LogQuery, signal?: AbortSignal): Promise<LogResult> {
+		const params = new URLSearchParams({ source: query.source });
+		if (query.lines) params.set('lines', String(query.lines));
+		if (query.since) params.set('since', query.since);
+		if (query.level) params.set('level', query.level);
+		if (query.filter) params.set('filter', query.filter);
+		return request<LogResult>(`/system/logs?${params}`, {}, signal);
 	}
 };

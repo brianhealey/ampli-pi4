@@ -110,21 +110,37 @@ else
     log "cmd/amplipi-update not found or empty — skipping (add later)"
 fi
 
+# ── Build amplipi-display ─────────────────────────────────────────────────────
+# amplipi-display.service (generated below) execs this. It was previously left
+# to be copied in by hand, so a clean install produced a unit pointing at a
+# binary that did not exist.
+if [[ -d "$_repo_root/cmd/amplipi-display" ]]; then
+    step "Building amplipi-display binary"
+    _display_bin_dst="$INSTALL_PREFIX/bin/amplipi-display"
+    "$_go_bin" build -ldflags="-s -w" -o "$_display_bin_dst" ./cmd/amplipi-display/...
+    log "amplipi-display installed to $_display_bin_dst"
+    record_done "amplipi-display binary"
+else
+    warn "cmd/amplipi-display not found — display service will have no binary"
+fi
+
 # ── Generate amplipi-display.service based on detected hardware ───────────────
-# DISPLAY_MODE is set by check_pi() in common.sh:
+# DISPLAY_MODE and DISPLAY_SPI_DEV are set by check_pi() in common.sh:
 #   "test-board"    → Pi 4/3/5 on standard 40-pin header (SPI0, --test-board flag)
-#   "carrier-board" → Original AmpliPi CM3+ carrier board (SPI1, no --test-board)
-step "Generating amplipi-display.service (display mode: $DISPLAY_MODE)"
+#   "carrier-board" → AmpliPi CM3+/CM4S carrier board (J16, no --test-board)
+# The spidev node differs per compute module, so it is passed explicitly rather
+# than compiled into the binary.
+step "Generating amplipi-display.service (display mode: $DISPLAY_MODE, spi: $DISPLAY_SPI_DEV)"
 
 _unit_dir="/etc/systemd/system"
 _units_installed=0
 
 if [[ "$DISPLAY_MODE" == "carrier-board" ]]; then
-    _display_exec="/usr/local/bin/amplipi-display --addr :unix"
-    _display_note="CM3+ carrier board — SPI1 (GPIO44), no --test-board flag"
+    _display_exec="/usr/local/bin/amplipi-display --addr :unix --spi-device $DISPLAY_SPI_DEV"
+    _display_note="$PI_MODEL carrier board — J16 TFT on $DISPLAY_SPI_DEV, no --test-board flag"
 else
-    _display_exec="/usr/local/bin/amplipi-display --test-board --addr :unix"
-    _display_note="Standard 40-pin header (Pi 4/3/5) — SPI0, --test-board flag"
+    _display_exec="/usr/local/bin/amplipi-display --test-board --addr :unix --spi-device $DISPLAY_SPI_DEV"
+    _display_note="Standard 40-pin header (Pi 4/3/5) — $DISPLAY_SPI_DEV, --test-board flag"
 fi
 
 _display_svc_content="[Unit]
@@ -155,7 +171,9 @@ if [[ -f "$_display_dst" ]] && [[ "$(cat "$_display_dst")" == "$_display_svc_con
 else
     echo "$_display_svc_content" > "$_display_dst"
     log "wrote amplipi-display.service (mode: $DISPLAY_MODE)"
-    (( _units_installed++ ))
+    # NB: not (( _units_installed++ )) — post-increment evaluates to the old
+    # value, so the first one returns 0 and set -e aborts the script.
+    _units_installed=$(( _units_installed + 1 ))
     record_done "amplipi-display.service ($DISPLAY_MODE)"
 fi
 
@@ -177,7 +195,7 @@ for _unit_src in "$_configs_dir"/*.service; do
     else
         install -m 0644 "$_unit_src" "$_unit_dst"
         log "installed $_unit_name"
-        (( _units_installed++ ))
+        _units_installed=$(( _units_installed + 1 ))
         record_done "$_unit_name"
     fi
 done
@@ -199,7 +217,7 @@ for _svc in amplipi.service amplipi-update.service amplipi-display.service; do
         record_skip "$_svc enable"
     else
         systemctl enable "$_svc"
-        log "$_svc enabled (not started — run: sudo systemctl start $svc)"
+        log "$_svc enabled (not started — run: sudo systemctl start $_svc)"
         record_done "$_svc enable"
     fi
 done

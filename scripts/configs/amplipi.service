@@ -2,12 +2,17 @@
 Description=AmpliPi Audio Controller
 After=network.target sound.target
 Wants=network.target
+# amplipi-display.service declares BindsTo=amplipi.service, so it stops whenever
+# this unit stops. That dependency is one-way: restarting this unit does not
+# bring it back, which leaves the front panel dark after every deploy. Pulling
+# it in from this side closes the loop.
+Wants=amplipi-display.service
 
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/amplipi-go
-ExecStart=/home/pi/amplipi-go/amplipi --addr :80
+WorkingDirectory=/home/pi
+ExecStart=/usr/local/bin/amplipi --addr :80
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

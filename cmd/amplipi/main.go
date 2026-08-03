@@ -25,9 +25,11 @@ import (
 	"github.com/micro-nova/amplipi-go/internal/controller"
 	"github.com/micro-nova/amplipi-go/internal/events"
 	"github.com/micro-nova/amplipi-go/internal/hardware"
+	"github.com/micro-nova/amplipi-go/internal/logs"
 	"github.com/micro-nova/amplipi-go/internal/maintenance"
 	"github.com/micro-nova/amplipi-go/internal/models"
 	"github.com/micro-nova/amplipi-go/internal/streams"
+	"github.com/micro-nova/amplipi-go/internal/system"
 	"github.com/micro-nova/amplipi-go/internal/zeroconf"
 )
 
@@ -63,19 +65,24 @@ func spaHandler(fsys fs.FS) http.Handler {
 
 func main() {
 	var (
-		mock   = flag.Bool("mock", false, "use mock hardware driver (no I2C device required)")
-		addr   = flag.String("addr", ":80", "HTTP listen address")
-		cfgDir = flag.String("config-dir", "", "config directory (default: ~/.config/amplipi)")
-		debug  = flag.Bool("debug", false, "enable debug logging")
+		mock     = flag.Bool("mock", false, "use mock hardware driver (no I2C device required)")
+		addr     = flag.String("addr", ":80", "HTTP listen address")
+		cfgDir   = flag.String("config-dir", "", "config directory (default: ~/.config/amplipi)")
+		debug    = flag.Bool("debug", false, "enable debug logging")
+		unitName = flag.String("systemd-unit", "amplipi.service", "systemd unit to read service logs from")
 	)
 	flag.Parse()
 
-	// Configure logging
+	// Configure logging. Records go to stderr as usual and are additionally
+	// mirrored into a ring buffer so the debug log screen can read the
+	// daemon's own log without depending on systemd.
 	logLevel := slog.LevelInfo
 	if *debug {
 		logLevel = slog.LevelDebug
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+	logBuffer := logs.NewRingBuffer(logs.DefaultBufferSize)
+	stderrHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
+	slog.SetDefault(slog.New(logs.NewHandler(stderrHandler, logBuffer)))
 
 	// Resolve config directory
 	if *cfgDir == "" {
@@ -212,8 +219,21 @@ func main() {
 		hardware.RunPiTempSender(ctx, hw)
 	}()
 
+	// Diagnostics: device telemetry and log readers for the about/debug pages.
+	// Prime the collector so the first CPU reading is a real delta, not 0%.
+	statsCollector := system.NewCollector(*cfgDir)
+	statsCollector.Prime()
+	logService := logs.NewService(logBuffer, *unitName)
+
 	// HTTP server
-	router := api.NewRouter(ctrl, authSvc, bus)
+	router := api.NewRouterWithOptions(api.Options{
+		Controller: ctrl,
+		Auth:       authSvc,
+		Bus:        bus,
+		ConfigDir:  *cfgDir,
+		System:     statsCollector,
+		Logs:       logService,
+	})
 
 	// Add web UI static file handler with SPA fallback
 	webFS, err := fs.Sub(webFiles, "static")
