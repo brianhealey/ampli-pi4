@@ -55,6 +55,58 @@ else
     record_done "timezone"
 fi
 
+# ── Persistent journal ───────────────────────────────────────────────────────
+# journald defaults to Storage=auto, which only persists if /var/log/journal
+# exists — it does not by default, so every reboot discards the log. That is
+# painful on a unit whose interesting failures are hardware-adjacent and often
+# only visible across a boot: which SPI controller bound, whether a USB device
+# ever enumerated, what the fan and temperature registers were doing.
+#
+# Capped deliberately: this runs on an SD card, and an uncapped journal is both
+# a space and a write-endurance problem.
+step "Persistent journal"
+
+_journal_conf_dir="/etc/systemd/journald.conf.d"
+_journal_conf="$_journal_conf_dir/amplipi.conf"
+_journal_content="# Installed by AmpliPi setup.sh — keep logs across reboots, but bounded
+# so the journal cannot fill the SD card or wear it out.
+[Journal]
+Storage=persistent
+SystemMaxUse=200M
+SystemMaxFileSize=20M
+"
+
+mkdir -p "$_journal_conf_dir"
+_journal_changed=0
+if write_if_changed "$_journal_conf" "$_journal_content"; then
+    _journal_changed=1
+fi
+
+# Raspberry Pi OS ships /usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf
+# to spare the SD card. "amplipi.conf" sorts after "40-..." so this drop-in wins,
+# but the directory must also exist before journald will use it.
+if [[ ! -d /var/log/journal ]]; then
+    mkdir -p /var/log/journal
+    log "created /var/log/journal"
+    _journal_changed=1
+else
+    skip "/var/log/journal (already exists)"
+fi
+# Run unconditionally: the directory may exist with the wrong ownership or ACLs,
+# in which case journald silently keeps logging to tmpfs.
+systemd-tmpfiles --create --prefix /var/log/journal &>/dev/null || true
+
+if (( _journal_changed )); then
+    systemctl restart systemd-journald 2>/dev/null || warn "could not restart systemd-journald"
+    # Restarting alone is not enough — the running journal stays in /run until
+    # it is flushed across, which otherwise only happens at the next boot.
+    journalctl --flush &>/dev/null || true
+    log "journald now persists logs across reboots (capped at 200M)"
+    record_done "persistent journal"
+else
+    record_skip "persistent journal"
+fi
+
 # ── Passwordless sudo for pi user (amplipi systemd commands) ─────────────────
 _sudoers_file="/etc/sudoers.d/amplipi"
 _sudoers_content="# AmpliPi: allow pi user to manage amplipi systemd services without password

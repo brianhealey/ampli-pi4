@@ -33,6 +33,23 @@ boot_add "dtparam=i2c_arm_baudrate=100000"
 # I2S audio interface
 boot_add "dtparam=i2s=on"
 
+# Drop the KMS display stack. This is a headless audio controller — the front
+# panel is an SPI TFT driven directly (see cmd/amplipi-display), not through
+# DRM — so nothing here uses vc4. Left in place it finds no display at boot,
+# logs "Cannot find any crtc or sizes", and then trips four WARN_ON assertions
+# in vc4_atomic_commit_tail with full stack traces, which look alarming in
+# dmesg and bury real problems.
+# max_framebuffers is meaningless once the overlay is gone.
+# NOTE: this leaves the unit with no HDMI output at all.
+boot_remove "dtoverlay=vc4-kms-v3d"
+boot_remove "max_framebuffers="
+
+# With vc4 gone, this would leave no HDMI output whatsoever — not even a
+# firmware console. Removing it lets the firmware set up a legacy framebuffer,
+# so a monitor still shows boot output if the unit ever needs debugging at the
+# console, without bringing back the KMS stack or its warnings.
+boot_remove "disable_fw_kms_setup"
+
 # Hardware UART on /dev/serial0 for STM32 preamp address assignment
 boot_add "enable_uart=1"
 

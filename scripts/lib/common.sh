@@ -285,7 +285,12 @@ write_installed_version() {
 write_if_changed() {
     local path="$1"
     local content="$2"
-    if [[ -f "$path" ]] && [[ "$(cat "$path")" == "$content" ]]; then
+    # Both sides go through command substitution so trailing newlines are
+    # stripped consistently. Comparing "$(cat …)" against a bare "$content"
+    # never matches when the content variable ends with a newline — which is
+    # the natural way to write these blocks — so the file was rewritten on
+    # every run, and callers that act on a change re-ran their side effects.
+    if [[ -f "$path" ]] && [[ "$(cat "$path")" == "$(echo "$content")" ]]; then
         skip "file unchanged: $path"
         return 1
     fi
