@@ -51,6 +51,17 @@ func New(hw hardware.Driver, profile *hardware.HardwareProfile, store config.Sto
 		return nil, err
 	}
 
+	// Pick up zones belonging to hardware that was added since this config was
+	// written — an expander attached later would otherwise never appear.
+	// New zones are disabled; the user enables them once the rooms are wired.
+	if added := models.ReconcileZones(state, profile); added > 0 {
+		slog.Info("controller: added zones for newly detected hardware",
+			"count", added, "total", len(state.Zones))
+		if err := store.Save(state); err != nil {
+			slog.Warn("controller: could not persist reconciled zones", "err", err)
+		}
+	}
+
 	c := &Controller{
 		state:        *state,
 		hw:           hw,

@@ -13,12 +13,23 @@
 	const enabledZones = $derived(amplipi.zones.filter((z) => !z.disabled));
 	const { grouped, standalone } = $derived(filterZonesByGroup(enabledZones, amplipi.groups));
 
+	// Every zone the hardware reports, for the availability section. Zones on
+	// hardware added after the config was written arrive disabled, so this is
+	// the only place they can be switched on.
+	const allZones = $derived([...amplipi.zones].sort((a, b) => a.id - b.id));
+
 	async function updateZone(zoneId: number, update: Partial<Zone>) {
 		try {
 			await api.updateZone(zoneId, update);
 		} catch (err) {
 			console.error('Failed to update zone:', err);
 		}
+	}
+
+	// Disabling a zone also mutes it, so a zone can never be left driving a
+	// speaker while hidden from the controls above.
+	async function setZoneEnabled(zone: Zone, enabled: boolean) {
+		await updateZone(zone.id, enabled ? { disabled: false } : { disabled: true, mute: true });
 	}
 
 	async function handleGroupInputChange(groupId: number, inputValue: string) {
@@ -413,4 +424,44 @@
 			<p class="text-gray-500 dark:text-gray-400">No zones available</p>
 		</div>
 	{/if}
+
+	<!-- Zone availability -->
+	<div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+		<h3 class="text-sm font-semibold text-gray-900 dark:text-white">Zone Availability</h3>
+		<p class="mt-1 text-xs text-gray-600 dark:text-gray-400">
+			Disabled zones are hidden from the controls above and their amplifiers stay switched off.
+			Zones belonging to hardware detected after setup start disabled.
+		</p>
+
+		<div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+			{#each allZones as zone (zone.id)}
+				<label
+					class="flex items-center gap-3 rounded-lg border border-gray-200 p-3 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700"
+				>
+					<input
+						type="checkbox"
+						checked={!zone.disabled}
+						onchange={(e) => setZoneEnabled(zone, e.currentTarget.checked)}
+						class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500 dark:border-gray-600"
+					/>
+					<span class="min-w-0 flex-1">
+						<span
+							class="block truncate text-sm font-medium text-gray-900 dark:text-white"
+							class:text-gray-400={zone.disabled}
+							class:dark:text-gray-500={zone.disabled}
+						>
+							{zone.name}
+						</span>
+						<span class="block text-xs text-gray-500 dark:text-gray-400">
+							Zone {zone.id + 1}{zone.disabled ? ' · disabled' : ''}
+						</span>
+					</span>
+				</label>
+			{/each}
+		</div>
+
+		{#if allZones.length === 0}
+			<p class="mt-4 text-sm text-gray-500 dark:text-gray-400">No zones detected.</p>
+		{/if}
+	</div>
 </div>
