@@ -1,314 +1,318 @@
 <script lang="ts">
 	import { amplipi } from '$lib/store.svelte';
 	import { api } from '$lib/api';
-	import type { Source, Zone, Group } from '$lib/types';
-	import { filterZonesByGroup, getSourceGroups, getGroupZones } from '$lib/grouping';
+	import type { Zone, Group, Source } from '$lib/types';
+	import { dbToPercent, percentToDb, volFToPercent } from '$lib/volume';
 
-	let expandedGroups = $state<Set<number>>(new Set());
-	// Track previous slider position (0-100) for each group to calculate deltas
-	let groupSliderPos = $state<Map<number, number>>(new Map());
+	// Which source name is being edited, and the in-flight text.
+	let editingSource = $state<number | null>(null);
+	let editingName = $state('');
 
-	async function updateZone(zoneId: number, update: { mute?: boolean; vol?: number }) {
-		try {
-			await api.updateZone(zoneId, update);
-		} catch (err) {
-			console.error('Failed to update zone:', err);
+	// Master slider position per source. The hardware has no per-source volume —
+	// it is applied as a relative shift across that source's zones — so the
+	// slider needs its own position to measure movement against.
+	let masterPos = $state<Map<number, number>>(new Map());
+
+	const streams = $derived(amplipi.streams.filter((s) => !s.disabled));
+
+	// RCA input n is wired to source n's analog input; there is no crossbar, so
+	// an RCA stream can only ever sit on that one source.
+	function pinnedSource(stream: { type: string; config?: Record<string, unknown> }): number | null {
+		if (stream.type === 'rca' && stream.config?.index !== undefined) {
+			return stream.config.index as number;
 		}
+		return null;
 	}
 
-	async function updateGroup(groupId: number, update: { mute?: boolean; vol_delta?: number }) {
-		const start = performance.now();
-		console.log(`[API] updateGroup(${groupId}, ${JSON.stringify(update)}) - START`);
-		try {
-			await api.updateGroup(groupId, update);
-			const elapsed = performance.now() - start;
-			console.log(`[API] updateGroup(${groupId}) - DONE in ${elapsed.toFixed(1)}ms`);
-		} catch (err) {
-			const elapsed = performance.now() - start;
-			console.error(`[API] updateGroup(${groupId}) - FAILED after ${elapsed.toFixed(1)}ms:`, err);
+	function streamsFor(sourceId: number) {
+		return streams.filter((s) => {
+			const pinned = pinnedSource(s);
+			return pinned === null || pinned === sourceId;
+		});
+	}
+
+	function groupsOn(sourceId: number): Group[] {
+		return amplipi.groups.filter((g) =>
+			g.zones.some((id) => {
+				const z = amplipi.getZone(id);
+				return z !== undefined && z.source_id === sourceId && !z.disabled;
+			})
+		);
+	}
+
+	// Zones on this source that are not already shown as part of a group.
+	function zonesOn(sourceId: number): Zone[] {
+		const grouped = new Set(groupsOn(sourceId).flatMap((g) => g.zones));
+		return amplipi.zones.filter(
+			(z) => z.source_id === sourceId && !z.disabled && !grouped.has(z.id)
+		);
+	}
+
+	function allZonesOn(sourceId: number): Zone[] {
+		return amplipi.zones.filter((z) => z.source_id === sourceId && !z.disabled);
+	}
+
+	function nowPlaying(src: Source): string {
+		if (!src.input) return 'No input';
+		if (src.input.startsWith('stream=')) {
+			return amplipi.getStream(parseInt(src.input.substring(7)))?.name ?? src.input;
 		}
+		return src.input;
 	}
 
-	function volFToPercent(vol_f: number): number {
-		return Math.round(vol_f * 100);
+	function masterValue(sourceId: number): number {
+		const cached = masterPos.get(sourceId);
+		if (cached !== undefined) return cached;
+		const zones = allZonesOn(sourceId);
+		if (zones.length === 0) return 0;
+		const avg =
+			zones.reduce((sum, z) => sum + dbToPercent(z.vol, z.vol_min, z.vol_max), 0) / zones.length;
+		return Math.round(avg);
 	}
 
-	function percentToVolF(percent: number): number {
-		return percent / 100;
-	}
-
-	async function updateSourceInput(sourceId: number, input: string) {
+	async function setSourceInput(sourceId: number, input: string) {
 		try {
 			await api.updateSource(sourceId, { input });
 		} catch (err) {
-			console.error('Failed to update source input:', err);
+			console.error('Failed to set source input:', err);
 		}
 	}
 
-	async function assignStreamToSource(sourceId: number, streamId: number) {
-		const input = streamId >= 0 ? `stream=${streamId}` : '';
-		await updateSourceInput(sourceId, input);
-	}
-
-	function getSourceInputType(source: Source): 'local' | 'stream' {
-		return source.input === 'local' || source.input === '' ? 'local' : 'stream';
-	}
-
-	function toggleGroupExpanded(groupId: number) {
-		// Create a new Set to ensure reactivity triggers
-		const newExpanded = new Set(expandedGroups);
-		if (newExpanded.has(groupId)) {
-			newExpanded.delete(groupId);
-		} else {
-			newExpanded.add(groupId);
+	async function commitSourceName(sourceId: number) {
+		const name = editingName.trim();
+		editingSource = null;
+		if (!name) return;
+		try {
+			await api.updateSource(sourceId, { name });
+		} catch (err) {
+			console.error('Failed to rename source:', err);
 		}
-		expandedGroups = newExpanded;
 	}
 
-	function getSourceStream(source: Source) {
-		if (!source.input.startsWith('stream=')) return null;
-		const streamId = parseInt(source.input.replace('stream=', ''));
-		return amplipi.getStream(streamId);
+	async function setZoneVolume(zone: Zone, percent: number) {
+		try {
+			await api.updateZone(zone.id, { vol: percentToDb(percent, zone.vol_min, zone.vol_max) });
+		} catch (err) {
+			console.error('Failed to set zone volume:', err);
+		}
 	}
 
-	function getSourceStreamId(source: Source): number {
-		if (!source.input.startsWith('stream=')) return -1;
-		return parseInt(source.input.replace('stream=', ''));
+	async function toggleZoneMute(zone: Zone) {
+		try {
+			await api.updateZone(zone.id, { mute: !zone.mute });
+		} catch (err) {
+			console.error('Failed to mute zone:', err);
+		}
 	}
 
-	function getSourceZones(source: Source) {
-		return amplipi.zones.filter((z) => z.source_id === source.id && !z.disabled);
+	async function setGroupVolume(group: Group, percent: number) {
+		const old = volFToPercent(group.vol_f ?? 0);
+		const delta = Math.round(((percent - old) / 100) * 79);
+		if (delta === 0) return;
+		try {
+			await api.updateGroup(group.id, { vol_delta: delta });
+		} catch (err) {
+			console.error('Failed to set group volume:', err);
+		}
 	}
 
-	function getSourceZonesAndGroups(source: Source) {
-		const zones = getSourceZones(source);
-		const groups = getSourceGroups(source.id, amplipi.zones, amplipi.groups);
-		const { grouped, standalone } = filterZonesByGroup(zones, groups);
-		return { groups, grouped, standalone };
+	async function toggleGroupMute(group: Group) {
+		try {
+			await api.updateGroup(group.id, { mute: !group.mute });
+		} catch (err) {
+			console.error('Failed to mute group:', err);
+		}
 	}
 
-	function dbToPercent(db: number, min: number = -79, max: number = 0): number {
-		return Math.round(((db - min) / (max - min)) * 100);
-	}
+	// Shift every zone on this source by the same amount, preserving the balance
+	// between rooms rather than flattening them all to one level.
+	async function setMasterVolume(sourceId: number, percent: number) {
+		const previous = masterValue(sourceId);
+		masterPos.set(sourceId, percent);
+		masterPos = new Map(masterPos);
 
-	function percentToDb(percent: number, min: number = -79, max: number = 0): number {
-		return Math.round(min + (percent / 100) * (max - min));
+		const deltaF = (percent - previous) / 100;
+		if (deltaF === 0) return;
+
+		const ids = allZonesOn(sourceId).map((z) => z.id);
+		if (ids.length === 0) return;
+		try {
+			await api.updateZones(ids, { vol_delta_f: deltaF });
+		} catch (err) {
+			console.error('Failed to set master volume:', err);
+		}
 	}
 </script>
 
 <div class="p-4 md:p-6">
 	<div class="mb-6">
-		<h2 class="text-2xl font-bold text-gray-900 dark:text-white">Sources</h2>
-		<p class="text-sm text-gray-600 dark:text-gray-400">Control your audio sources and zones</p>
+		<h2 class="text-2xl font-bold text-gray-900 dark:text-white">Home</h2>
+		<p class="text-sm text-gray-600 dark:text-gray-400">
+			Each source carries one input and feeds the zones assigned to it.
+		</p>
 	</div>
 
-	<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+	<div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
 		{#each amplipi.sources as source (source.id)}
-			{@const { groups, grouped, standalone } = getSourceZonesAndGroups(source)}
-			{@const stream = getSourceStream(source)}
-			{@const totalZoneCount = standalone.length + Array.from(grouped.values()).reduce((sum, zones) => sum + zones.length, 0)}
+			{@const groups = groupsOn(source.id)}
+			{@const zones = zonesOn(source.id)}
+			{@const total = allZonesOn(source.id).length}
 
 			<div
-				class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800"
+				class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
 			>
-				<!-- Source header -->
-				<div class="mb-4">
-					<div class="mb-2 flex items-start justify-between">
-						<div>
-							<h3 class="font-semibold text-gray-900 dark:text-white">{source.name}</h3>
-							{#if stream}
-								<p class="text-sm text-gray-600 dark:text-gray-400">{stream.name}</p>
-								{#if stream.info?.state}
-									<span
-										class={`mt-1 inline-block rounded px-2 py-0.5 text-xs font-medium ${stream.info.state === 'playing' ? 'bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-400' : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'}`}
-									>
-										{stream.info.state}
-									</span>
-								{/if}
-							{:else}
-								<p class="text-sm text-gray-500 dark:text-gray-500">No stream</p>
-							{/if}
-						</div>
-						<span class="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/20 dark:text-blue-400">
-							{totalZoneCount} zone{totalZoneCount !== 1 ? 's' : ''}
-						</span>
-					</div>
-
-					<!-- Stream selector -->
-					<div>
-						<select
-							value={getSourceStreamId(source)}
-							onchange={(e) => assignStreamToSource(source.id, parseInt(e.currentTarget.value))}
-							class="w-full rounded border border-gray-300 bg-white px-2 py-1 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+				<!-- Source name (click to rename) -->
+				<div class="flex items-start justify-between gap-2">
+					{#if editingSource === source.id}
+						<!-- svelte-ignore a11y_autofocus -->
+						<input
+							type="text"
+							bind:value={editingName}
+							autofocus
+							onblur={() => commitSourceName(source.id)}
+							onkeydown={(e) => {
+								if (e.key === 'Enter') commitSourceName(source.id);
+								if (e.key === 'Escape') editingSource = null;
+							}}
+							class="w-full rounded border border-blue-500 bg-white px-2 py-1 text-lg font-semibold dark:bg-gray-700 dark:text-white"
+							aria-label="Source name"
+						/>
+					{:else}
+						<button
+							onclick={() => {
+								editingSource = source.id;
+								editingName = source.name;
+							}}
+							class="text-left text-lg font-semibold text-gray-900 hover:underline dark:text-white"
+							title="Rename source"
 						>
-							<option value={-1}>No stream</option>
-							{#each amplipi.streams as s (s.id)}
-								<option value={s.id}>{s.name} ({s.type})</option>
-							{/each}
-						</select>
-					</div>
+							{source.name}
+						</button>
+					{/if}
+					<span class="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+						{total} zone{total === 1 ? '' : 's'}
+					</span>
 				</div>
 
-				<!-- Groups and zones list -->
-				{#if groups.length > 0 || standalone.length > 0}
-					<div class="space-y-3">
-						<!-- Groups first -->
-						{#each groups as group (group.id)}
-							{@const groupZones = grouped.get(group.id) || []}
-							{@const isExpanded = expandedGroups.has(group.id)}
-							{#if groupZones.length > 0}
-								<div class="rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20">
-									<!-- Group header -->
-									<div class="mb-2 flex items-center justify-between">
-										<button
-											onclick={() => toggleGroupExpanded(group.id)}
-											class="flex items-center gap-2 text-left"
-										>
-											<span class="text-sm font-medium text-purple-900 dark:text-purple-300">
-												{isExpanded ? '▼' : '▶'} {group.name}
-											</span>
-											<span class="text-xs text-purple-700 dark:text-purple-400">
-												({groupZones.length} zone{groupZones.length !== 1 ? 's' : ''})
-											</span>
-										</button>
-										<button
-											onclick={() => updateGroup(group.id, { mute: !group.mute })}
-											class="rounded p-1 hover:bg-purple-100 dark:hover:bg-purple-800"
-											class:text-gray-400={group.mute}
-											class:text-purple-600={!group.mute}
-											class:dark:text-purple-400={!group.mute}
-										>
-											{group.mute ? '🔇' : '🔊'}
-										</button>
-									</div>
+				<p class="mt-0.5 text-sm text-gray-600 dark:text-gray-400">{nowPlaying(source)}</p>
 
-									<!-- Group volume slider -->
-									<div class="mb-3 flex items-center gap-2">
-										<span class="text-xs text-purple-700 dark:text-purple-400">
-											{volFToPercent(group.vol_f ?? 0)}%
-										</span>
-										<input
-											type="range"
-											min="0"
-											max="100"
-											value={volFToPercent(group.vol_f ?? 0)}
-											oninput={(e) => {
-												const newPos = parseInt(e.currentTarget.value);
-												const oldPos = groupSliderPos.get(group.id) ?? volFToPercent(group.vol_f ?? 0);
-												const deltaPercent = newPos - oldPos;
-
-												// Convert percent delta to dB delta (79 dB range)
-												const volDelta = Math.round((deltaPercent / 100) * 79);
-
-												console.log(`[Group ${group.id}] Slider: ${oldPos}% -> ${newPos}% (delta: ${deltaPercent}%, ${volDelta}dB)`);
-
-												// Track new position for next delta calculation
-												groupSliderPos.set(group.id, newPos);
-
-												if (volDelta !== 0) {
-													console.log(`[Group ${group.id}] Sending vol_delta: ${volDelta}`);
-													updateGroup(group.id, { vol_delta: volDelta, mute: false });
-												} else {
-													console.log(`[Group ${group.id}] No change (volDelta === 0)`);
-												}
-											}}
-											class="flex-1 accent-purple-600"
-										/>
-									</div>
-
-									<!-- Expanded group zones -->
-									{#if isExpanded}
-										<div class="space-y-2 border-t border-purple-200 p-3 pt-2 dark:border-purple-800">
-											{#each groupZones as zone (zone.id)}
-												<div class="rounded bg-white p-2 dark:bg-gray-800">
-													<div class="mb-1 flex items-center justify-between">
-														<span class="text-xs font-medium text-gray-700 dark:text-gray-300">
-															{zone.name}
-														</span>
-														<button
-															onclick={() => updateZone(zone.id, { mute: !zone.mute })}
-															class="rounded p-0.5 text-xs hover:bg-gray-100 dark:hover:bg-gray-700"
-															class:text-gray-400={zone.mute}
-															class:text-blue-600={!zone.mute}
-															class:dark:text-blue-400={!zone.mute}
-														>
-															{zone.mute ? '🔇' : '🔊'}
-														</button>
-													</div>
-													<div class="flex items-center gap-1">
-														<span class="text-xs text-gray-500 dark:text-gray-400">
-															{dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}%
-														</span>
-														<input
-															type="range"
-															min="0"
-															max="100"
-															value={dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}
-															oninput={(e) => {
-																const percent = parseInt(e.currentTarget.value);
-																const db = percentToDb(percent, zone.vol_min, zone.vol_max);
-																updateZone(zone.id, { vol: db });
-															}}
-															class="flex-1 accent-blue-600"
-														/>
-													</div>
-												</div>
-											{/each}
-										</div>
-									{/if}
-								</div>
-							{/if}
+				<!-- Input -->
+				<div class="mt-3">
+					<label
+						for="source-input-{source.id}"
+						class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Input</label
+					>
+					<select
+						id="source-input-{source.id}"
+						value={source.input || ''}
+						onchange={(e) => setSourceInput(source.id, e.currentTarget.value)}
+						class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+					>
+						<option value="">None</option>
+						{#each streamsFor(source.id) as stream (stream.id)}
+							<option value="stream={stream.id}">
+								{stream.name}{stream.type === 'rca' && stream.config?.index !== undefined
+									? ` (RCA ${(stream.config.index as number) + 1})`
+									: ''}
+							</option>
 						{/each}
+					</select>
+				</div>
 
-						<!-- Standalone zones (not in any group) -->
-						{#each standalone as zone (zone.id)}
-							<div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-700/50">
-								<div class="mb-2 flex items-center justify-between">
-									<span class="text-sm font-medium text-gray-900 dark:text-white">{zone.name}</span>
-									<button
-										onclick={() => updateZone(zone.id, { mute: !zone.mute })}
-										class="rounded p-1 hover:bg-gray-200 dark:hover:bg-gray-600"
-										class:text-gray-400={zone.mute}
-										class:text-blue-600={!zone.mute}
-										class:dark:text-blue-400={!zone.mute}
-									>
-										{zone.mute ? '🔇' : '🔊'}
-									</button>
-								</div>
+				<!-- Master volume for everything on this source -->
+				{#if total > 0}
+					<div class="mt-4 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
+						<div class="flex items-center justify-between">
+							<span class="text-sm font-medium text-gray-700 dark:text-gray-300">All zones</span>
+							<span class="text-xs text-gray-600 dark:text-gray-400"
+								>{masterValue(source.id)}%</span
+							>
+						</div>
+						<input
+							type="range"
+							min="0"
+							max="100"
+							value={masterValue(source.id)}
+							onchange={(e) => setMasterVolume(source.id, parseInt(e.currentTarget.value))}
+							class="mt-1 w-full"
+							aria-label="Master volume for {source.name}"
+						/>
+						<p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+							Shifts every zone together, keeping their relative levels.
+						</p>
+					</div>
+				{/if}
 
-								<!-- Volume slider -->
-								<div class="flex items-center gap-2">
-									<span class="text-xs text-gray-500 dark:text-gray-400">
-										{dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}%
-									</span>
-									<input
-										type="range"
-										min="0"
-										max="100"
-										value={dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}
-										oninput={(e) => {
-											const percent = parseInt(e.currentTarget.value);
-											const db = percentToDb(percent, zone.vol_min, zone.vol_max);
-											updateZone(zone.id, { vol: db });
-										}}
-										class="flex-1 accent-blue-600"
-									/>
-								</div>
+				<!-- Groups on this source -->
+				{#each groups as group (group.id)}
+					<div class="mt-3 rounded-lg border border-purple-200 p-3 dark:border-purple-800">
+						<div class="flex items-center justify-between">
+							<span class="text-sm font-semibold text-purple-800 dark:text-purple-300">
+								{group.name}
+								<span class="font-normal text-purple-600 dark:text-purple-400">
+									({group.zones.length} zones)
+								</span>
+							</span>
+							<button
+								onclick={() => toggleGroupMute(group)}
+								class="rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-700"
+								aria-label={group.mute ? `Unmute ${group.name}` : `Mute ${group.name}`}
+								aria-pressed={!group.mute}
+							>
+								<span class="text-lg" aria-hidden="true">{group.mute ? '🔇' : '🔊'}</span>
+							</button>
+						</div>
+						<input
+							type="range"
+							min="0"
+							max="100"
+							value={volFToPercent(group.vol_f ?? 0)}
+							onchange={(e) => setGroupVolume(group, parseInt(e.currentTarget.value))}
+							class="mt-1 w-full"
+							aria-label="Volume for {group.name}"
+						/>
+					</div>
+				{/each}
+
+				<!-- Ungrouped zones on this source -->
+				{#each zones as zone (zone.id)}
+					<div class="mt-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+						<div class="flex items-center justify-between">
+							<span class="text-sm font-medium text-gray-900 dark:text-white">{zone.name}</span>
+							<div class="flex items-center gap-2">
+								<span class="text-xs text-gray-600 dark:text-gray-400">
+									{dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}%
+								</span>
+								<button
+									onclick={() => toggleZoneMute(zone)}
+									class="rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-700"
+									aria-label={zone.mute ? `Unmute ${zone.name}` : `Mute ${zone.name}`}
+									aria-pressed={!zone.mute}
+								>
+									<span class="text-lg" aria-hidden="true">{zone.mute ? '🔇' : '🔊'}</span>
+								</button>
 							</div>
-						{/each}
+						</div>
+						<input
+							type="range"
+							min="0"
+							max="100"
+							value={dbToPercent(zone.vol, zone.vol_min, zone.vol_max)}
+							onchange={(e) => setZoneVolume(zone, parseInt(e.currentTarget.value))}
+							class="mt-1 w-full"
+							aria-label="Volume for {zone.name}"
+						/>
 					</div>
-				{:else}
-					<div class="rounded-lg bg-gray-50 p-4 text-center dark:bg-gray-700/50">
-						<p class="text-sm text-gray-500 dark:text-gray-400">No zones connected</p>
-					</div>
+				{/each}
+
+				{#if total === 0}
+					<p
+						class="mt-3 rounded-lg border-2 border-dashed border-gray-300 p-4 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400"
+					>
+						No zones assigned — assign some on the Zones page.
+					</p>
 				{/if}
 			</div>
 		{/each}
 	</div>
-
-	{#if amplipi.sources.length === 0}
-		<div class="rounded-lg border-2 border-dashed border-gray-300 p-12 text-center dark:border-gray-700">
-			<p class="text-gray-500 dark:text-gray-400">No sources available</p>
-		</div>
-	{/if}
 </div>

@@ -883,7 +883,7 @@ func TestLMSStream_Basics(t *testing.T) {
 
 func TestSpotifyStream_Basics(t *testing.T) {
 	ctx := context.Background()
-	s := NewSpotifyStream("My Spotify", nil)
+	s := NewSpotifyStream("My Spotify", 0, nil)
 
 	if s.Type() != "spotify_connect" {
 		t.Errorf("Type() = %q, want spotify_connect", s.Type())

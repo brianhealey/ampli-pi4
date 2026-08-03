@@ -7,9 +7,16 @@
 	let newStreamName = $state('');
 	let newStreamType = $state('spotify');
 	let newStreamConfig = $state<Record<string, string>>({});
+	// Kept separate from newStreamConfig because that map is all strings, and
+	// the backend's ConfigInt only accepts a JSON number — a string "320" would
+	// silently fall back to the default.
+	let newStreamBitrate = $state(160);
 
 	let editingStream = $state<Stream | null>(null);
 	let editStreamName = $state('');
+	// go-librespot accepts 96, 160 or 320 kbps. 320 needs Spotify Premium, so
+	// 160 stays the default rather than silently breaking free accounts.
+	let editStreamBitrate = $state(160);
 
 	const streamTypes = [
 		{ value: 'spotify', label: 'Spotify Connect', icon: '🎵' },
@@ -32,6 +39,10 @@
 				return;
 			}
 
+			if (newStreamType === 'spotify' || newStreamType === 'spotify_connect') {
+				config.bitrate = newStreamBitrate;
+			}
+
 			await api.createStream({
 				name: newStreamName,
 				type: newStreamType,
@@ -42,6 +53,7 @@
 			newStreamName = '';
 			newStreamType = 'spotify';
 			newStreamConfig = {};
+			newStreamBitrate = 160;
 		} catch (err) {
 			console.error('Failed to create stream:', err);
 			alert('Failed to create stream: ' + (err as Error).message);
@@ -69,19 +81,29 @@
 	function startEditStream(stream: Stream) {
 		editingStream = stream;
 		editStreamName = stream.name;
+		editStreamBitrate = (stream.config?.bitrate as number) ?? 160;
 	}
 
 	async function saveStreamEdit() {
 		if (!editingStream || !editStreamName.trim()) return;
 
 		try {
-			await api.updateStream(editingStream.id, { name: editStreamName });
+			const update: { name: string; config?: Record<string, unknown> } = { name: editStreamName };
+			if (isSpotify(editingStream)) {
+				update.config = { ...editingStream.config, bitrate: editStreamBitrate };
+			}
+			await api.updateStream(editingStream.id, update);
 			editingStream = null;
 			editStreamName = '';
 		} catch (err) {
 			console.error('Failed to update stream:', err);
 			alert('Failed to update stream: ' + (err as Error).message);
 		}
+	}
+
+	// go-librespot is used for both stream type spellings.
+	function isSpotify(stream: Stream): boolean {
+		return stream.type === 'spotify' || stream.type === 'spotify_connect';
 	}
 
 	function getStreamIcon(type: string): string {
@@ -326,6 +348,29 @@
 			</div>
 
 			<!-- Type-specific fields -->
+			{#if newStreamType === 'spotify' || newStreamType === 'spotify_connect'}
+				<div class="mb-4">
+					<label
+						for="stream-bitrate"
+						class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300"
+					>
+						Audio quality
+					</label>
+					<select
+						id="stream-bitrate"
+						bind:value={newStreamBitrate}
+						class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+					>
+						<option value={96}>Low — 96 kbps</option>
+						<option value={160}>Normal — 160 kbps</option>
+						<option value={320}>High — 320 kbps (requires Premium)</option>
+					</select>
+					<p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+						320 kbps needs a Spotify Premium account; free accounts cap at 160.
+					</p>
+				</div>
+			{/if}
+
 			{#if newStreamType === 'internetradio'}
 				<div class="mb-4">
 					<label for="stream-url" class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -406,6 +451,29 @@
 					autofocus
 				/>
 			</div>
+
+			{#if isSpotify(editingStream)}
+				<div class="mb-4">
+					<label
+						for="edit-stream-bitrate"
+						class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300"
+					>
+						Audio quality
+					</label>
+					<select
+						id="edit-stream-bitrate"
+						bind:value={editStreamBitrate}
+						class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+					>
+						<option value={96}>Low — 96 kbps</option>
+						<option value={160}>Normal — 160 kbps</option>
+						<option value={320}>High — 320 kbps (requires Premium)</option>
+					</select>
+					<p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+						320 kbps needs a Spotify Premium account; free accounts cap at 160.
+					</p>
+				</div>
+			{/if}
 
 			{#if editingStream.type === 'rca'}
 				<p class="mb-4 text-sm text-gray-600 dark:text-gray-400">

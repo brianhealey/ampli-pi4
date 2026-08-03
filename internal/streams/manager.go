@@ -62,10 +62,19 @@ func (m *Manager) Sync(ctx context.Context, modelStreams []models.Stream, source
 		desiredIDs[s.ID] = s
 	}
 
-	// Step 1: Remove streams that are no longer in the model
+	// Step 1: Remove streams that are no longer in the model, and tear down any
+	// whose config changed. A Streamer reads its config once, at construction,
+	// so an edited setting only takes effect if the Streamer is rebuilt —
+	// Step 2 recreates anything removed here.
 	for id, state := range m.streams {
-		if _, desired := desiredIDs[id]; !desired {
-			slog.Info("stream manager: removing stream", "id", id)
+		desiredStream, desired := desiredIDs[id]
+		rebuild := desired && streamConfigKey(desiredStream) != state.ConfigKey
+		if !desired || rebuild {
+			if rebuild {
+				slog.Info("stream manager: config changed, rebuilding stream", "id", id)
+			} else {
+				slog.Info("stream manager: removing stream", "id", id)
+			}
 			if state.PhysSrc >= 0 {
 				if err := state.Streamer.Disconnect(ctx); err != nil {
 					slog.Warn("stream manager: disconnect error on removal", "id", id, "err", err)
@@ -101,11 +110,12 @@ func (m *Manager) Sync(ctx context.Context, modelStreams []models.Stream, source
 				continue
 			}
 			state := &StreamState{
-				Streamer: streamer,
-				StreamID: id,
-				VSRC:     -1,
-				PhysSrc:  -1,
-				Active:   false,
+				Streamer:  streamer,
+				StreamID:  id,
+				VSRC:      -1,
+				PhysSrc:   -1,
+				Active:    false,
+				ConfigKey: streamConfigKey(stream),
 			}
 			m.streams[id] = state
 
@@ -305,7 +315,7 @@ func NewStreamer(stream models.Stream, onChange func(models.StreamInfo)) (Stream
 		return NewAirPlayStream(name), nil
 
 	case "spotify_connect", "spotify":
-		return NewSpotifyStream(name, onChange), nil
+		return NewSpotifyStream(name, stream.ConfigInt("bitrate", 0), onChange), nil
 
 	case "internet_radio", "internetradio":
 		u := stream.ConfigString("url")

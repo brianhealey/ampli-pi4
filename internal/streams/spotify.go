@@ -21,6 +21,7 @@ const goLibrespotConfig = `device_name: "%s"
 device_type: "stb"
 audio_device: "%s"
 external_volume: true
+bitrate: %d
 server:
   enabled: true
   port: %d
@@ -34,6 +35,7 @@ type SpotifyStream struct {
 	SubprocStream
 
 	name    string
+	bitrate int // go-librespot playback bitrate, kbps
 	apiPort int // 3678 + vsrc
 
 	monCancel context.CancelFunc
@@ -43,9 +45,13 @@ type SpotifyStream struct {
 }
 
 // NewSpotifyStream creates a new Spotify Connect stream.
-func NewSpotifyStream(name string, onChange func(models.StreamInfo)) *SpotifyStream {
+// bitrate is the go-librespot playback bitrate in kbps. 320 requires Spotify
+// Premium, so callers pass whatever the stream is configured with and
+// SpotifyBitrate falls back to the safe default for anything unsupported.
+func NewSpotifyStream(name string, bitrate int, onChange func(models.StreamInfo)) *SpotifyStream {
 	return &SpotifyStream{
 		name:     name,
+		bitrate:  SpotifyBitrate(bitrate),
 		onChange: onChange,
 	}
 }
@@ -61,7 +67,7 @@ func (s *SpotifyStream) Activate(ctx context.Context, vsrc int, configDir string
 
 	s.apiPort = 3678 + vsrc
 	device := VirtualOutputDevice(vsrc)
-	cfgContent := fmt.Sprintf(goLibrespotConfig, s.name, device, s.apiPort)
+	cfgContent := fmt.Sprintf(goLibrespotConfig, s.name, device, s.bitrate, s.apiPort)
 
 	if err := writeFileAtomic(dir+"/config.yml", []byte(cfgContent)); err != nil {
 		return fmt.Errorf("spotify_connect: write config.yml: %w", err)

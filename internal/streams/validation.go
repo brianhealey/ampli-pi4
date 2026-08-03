@@ -208,3 +208,18 @@ func ValidateLMSServer(server string) error {
 
 	return nil
 }
+
+// SpotifyBitrate returns a playback bitrate go-librespot will accept.
+//
+// go-librespot allows only 96, 160 or 320 kbps and refuses to start on any
+// other value, so an unset or unsupported setting falls back to its own
+// default of 160 rather than failing. 320 requires Spotify Premium, which is
+// why it is opt-in rather than the default.
+func SpotifyBitrate(kbps int) int {
+	switch kbps {
+	case 96, 160, 320:
+		return kbps
+	default:
+		return 160
+	}
+}

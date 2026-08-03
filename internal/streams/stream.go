@@ -57,4 +57,7 @@ type StreamState struct {
 	VSRC     int // -1 if not activated
 	PhysSrc  int // -1 if not connected
 	Active   bool
+	// ConfigKey fingerprints the stream config this Streamer was built from,
+	// so Sync can tell when an edit requires rebuilding it.
+	ConfigKey string
 }
