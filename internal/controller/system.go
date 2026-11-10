@@ -25,6 +25,7 @@ func (c *Controller) GetInfo() models.Info {
 		info.FirmwareVersion = c.profile.FirmwareVersion
 		info.FanMode = c.profile.FanMode.String()
 		info.AvailableStreams = c.profile.AvailableStreamTypes()
+		info.EQAvailable = c.profile.EQAvailable()
 	}
 
 	return info
@@ -196,6 +197,7 @@ func (c *Controller) LoadConfig(ctx context.Context, incoming models.State) (mod
 
 		// A restored config may come from a unit with more DACs than this one.
 		enforceSourceDACs(s, c.profile)
+		sanitizeSourceEQs(s)
 
 		return c.applyStateToHW(ctx, *s)
 	})

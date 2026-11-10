@@ -71,6 +71,13 @@ func New(hw hardware.Driver, profile *hardware.HardwareProfile, store config.Sto
 		}
 	}
 
+	// EQ settings the API would refuse must not reach a CamillaDSP config.
+	if dropped := sanitizeSourceEQs(state); dropped > 0 {
+		if err := store.Save(state); err != nil {
+			slog.Warn("controller: could not persist dropped source EQs", "err", err)
+		}
+	}
+
 	c := &Controller{
 		state:        *state,
 		hw:           hw,
@@ -79,6 +86,12 @@ func New(hw hardware.Driver, profile *hardware.HardwareProfile, store config.Sto
 		bus:          bus,
 		streams:      mgr,
 		syncShutdown: make(chan struct{}),
+	}
+
+	// Runtime EQ status changes (bridge started, active, failed) are not
+	// state mutations; push them to subscribers directly.
+	if mgr != nil {
+		mgr.SetEQStatusListener(c.publishState)
 	}
 
 	// Apply initial state to hardware
@@ -127,11 +140,12 @@ func (c *Controller) UpdateStreamInfo(id int, info models.StreamInfo) {
 	})
 }
 
-// State returns a deep copy of the current system state.
+// State returns a deep copy of the current system state, with derived EQ
+// status filled in.
 func (c *Controller) State() models.State {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.state.DeepCopy()
+	return c.withEQStatus(c.state.DeepCopy())
 }
 
 // apply is the core mutation primitive. It:
@@ -150,14 +164,15 @@ func (c *Controller) apply(fn func(*models.State) error) (models.State, error) {
 
 	c.state = next
 	_ = c.store.Save(&c.state) // debounced, async
-	c.bus.Publish(c.state)
+	out := c.withEQStatus(c.state)
+	c.bus.Publish(out)
 
 	// Schedule coalesced stream sync (non-blocking)
 	if c.streams != nil {
 		c.scheduleStreamSync(next.Streams, next.Sources)
 	}
 
-	return c.state, nil
+	return out, nil
 }
 
 // applyStateToHW writes the complete state to the hardware driver.

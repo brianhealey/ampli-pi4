@@ -12,6 +12,13 @@ type Source struct {
 	// Derived from the detected hardware at startup (any persisted value is
 	// overwritten); never set by clients.
 	HasDAC *bool `json:"has_dac,omitempty"`
+	// EQ is the parametric EQ for digital streams on this source. Omitted when
+	// never configured, which means no EQ at all.
+	EQ *SourceEQ `json:"eq,omitempty"`
+	// EQStatus reports whether EQ is being applied. Derived at read time by
+	// the controller (only for sources with EQ configured); never persisted
+	// and never set by clients.
+	EQStatus *EQStatus `json:"eq_status,omitempty"`
 }
 
 // Zone represents one of up to 36 amplified outputs.
@@ -96,6 +103,7 @@ type Info struct {
 	FirmwareVersion string   `json:"firmware_version,omitempty"` // e.g. "1.7-abc12345"
 	FanMode         string   `json:"fan_mode,omitempty"`         // "pwm", "linear", "external", "forced"
 	AvailableStreams []string `json:"available_streams,omitempty"` // stream types with binaries present
+	EQAvailable      bool     `json:"eq_available,omitempty"`      // CamillaDSP installed: per-source EQ can run
 }
 
 // State is the complete system state returned by GET /api.
@@ -118,6 +126,13 @@ func (s State) DeepCopy() State {
 	// Copy sources
 	next.Sources = make([]Source, len(s.Sources))
 	copy(next.Sources, s.Sources)
+	for i := range next.Sources {
+		next.Sources[i].EQ = next.Sources[i].EQ.Clone()
+		if st := next.Sources[i].EQStatus; st != nil {
+			v := *st
+			next.Sources[i].EQStatus = &v
+		}
+	}
 
 	// Copy zones
 	next.Zones = make([]Zone, len(s.Zones))
@@ -181,6 +196,9 @@ func (s State) DeepCopy() State {
 			if p.State.Sources != nil {
 				ps.Sources = make([]SourceUpdate, len(p.State.Sources))
 				copy(ps.Sources, p.State.Sources)
+				for j := range ps.Sources {
+					ps.Sources[j].EQ = ps.Sources[j].EQ.Clone()
+				}
 			}
 			if p.State.Zones != nil {
 				ps.Zones = make([]ZoneUpdate, len(p.State.Zones))

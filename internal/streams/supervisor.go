@@ -3,6 +3,7 @@ package streams
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os/exec"
 	"strings"
@@ -32,6 +33,12 @@ type Supervisor struct {
 	maxBackoff  time.Duration
 	runOnce     bool        // If true, don't restart after process exits
 	onExit      func(error) // Called when process exits (before restart decision)
+
+	// onGiveUp, if set, is called from the supervision goroutine when it stops
+	// restarting the process on its own (fail limit reached or binary
+	// missing), not when Stop or ctx ends it. It must not call Stop or Start
+	// on this Supervisor.
+	onGiveUp func(reason string)
 
 	// retryForever keeps restarting after maxFails fast failures instead of
 	// giving up, with the backoff still capped at maxBackoff. For processes
@@ -158,7 +165,9 @@ func (s *Supervisor) supervise(ctx context.Context) {
 		if s.failCount >= s.maxFails {
 			if !s.retryForever {
 				slog.Error("supervisor giving up after too many fast-fails", "name", s.name, "fails", s.failCount)
+				fails := s.failCount
 				s.mu.Unlock()
+				s.giveUp(fmt.Sprintf("exited or failed its health check %d times in a row", fails))
 				return
 			}
 			if s.failCount == s.maxFails {
@@ -190,6 +199,7 @@ func (s *Supervisor) supervise(ctx context.Context) {
 			// Binary not found is permanent — no point retrying
 			if errors.Is(err, exec.ErrNotFound) || isNotFoundError(err) {
 				slog.Error("supervisor: binary not found, giving up", "name", s.name, "cmd", cmd.Path, "err", err)
+				s.giveUp(fmt.Sprintf("%s not found", cmd.Path))
 				return
 			}
 			slog.Error("supervisor: failed to start process", "name", s.name, "err", err)
@@ -330,6 +340,13 @@ func (s *Supervisor) supervise(ctx context.Context) {
 		if backoff > 0 {
 			s.sleepOrStop(ctx, backoff)
 		}
+	}
+}
+
+// giveUp runs the onGiveUp hook, if any.
+func (s *Supervisor) giveUp(reason string) {
+	if s.onGiveUp != nil {
+		s.onGiveUp(reason)
 	}
 }
 

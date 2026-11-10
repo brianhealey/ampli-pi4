@@ -15,16 +15,14 @@ import (
 func (c *Controller) GetSources() []models.Source {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	result := make([]models.Source, len(c.state.Sources))
-	copy(result, c.state.Sources)
-	return result
+	return c.withEQStatus(c.state).Sources
 }
 
 // GetSource returns a single source by ID.
 func (c *Controller) GetSource(id int) (*models.Source, *models.AppError) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, s := range c.state.Sources {
+	for _, s := range c.withEQStatus(c.state).Sources {
 		if s.ID == id {
 			cp := s
 			return &cp, nil
@@ -59,6 +57,10 @@ func (c *Controller) SetSource(ctx context.Context, id int, upd models.SourceUpd
 		return models.State{}, models.ErrBadRequest("source id must be 0-3")
 	}
 
+	if appErr := validateEQ(upd.EQ); appErr != nil {
+		return models.State{}, appErr
+	}
+
 	// Validate hardware capability before applying
 	if upd.Input != nil {
 		if appErr := c.validateSourceInput(*upd.Input); appErr != nil {
@@ -80,6 +82,9 @@ func (c *Controller) SetSource(ctx context.Context, id int, upd models.SourceUpd
 
 		if upd.Name != nil {
 			src.Name = *upd.Name
+		}
+		if upd.EQ != nil {
+			src.EQ = upd.EQ.Clone()
 		}
 		if upd.Input != nil {
 			if appErr := checkSourceDAC(c.profile, s, id, *upd.Input); appErr != nil {

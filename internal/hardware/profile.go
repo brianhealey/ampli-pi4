@@ -134,6 +134,15 @@ type HardwareProfile struct {
 	// Older hardware: [0] only
 	// Newer hardware with USB DAC: [0, 1, 2, 3]
 	AvailablePhysicalOutputs []int
+
+	// EQBinary is the CamillaDSP binary used for per-source EQ, or "" when it
+	// is not installed (EQ settings are then stored but not applied).
+	EQBinary string
+}
+
+// EQAvailable reports whether per-source EQ can run on this unit.
+func (p *HardwareProfile) EQAvailable() bool {
+	return p != nil && p.EQBinary != ""
 }
 
 // HasMainUnit returns true if the profile contains a main (AP1_S4Z6) unit.
@@ -281,6 +290,9 @@ func Detect(ctx context.Context, drv Driver) (*HardwareProfile, error) {
 	// Physical output detection
 	p.AvailablePhysicalOutputs = DetectPhysicalOutputs()
 
+	// Per-source EQ (CamillaDSP)
+	p.EQBinary = DetectEQBinary()
+
 	return p, nil
 }
 
@@ -401,6 +413,30 @@ func detectStreamCapabilities() []StreamCapability {
 	return caps
 }
 
+// eqBinaryName is the CamillaDSP executable; eqInstallPath is where
+// scripts/lib/56-camilladsp.sh installs it, checked in case the daemon's PATH
+// does not include /usr/local/bin.
+const (
+	eqBinaryName  = "camilladsp"
+	eqInstallPath = "/usr/local/bin/camilladsp"
+)
+
+// DetectEQBinary returns the path of the CamillaDSP binary, or "" if it is not
+// installed. Same lookup as the stream binaries, plus the install location.
+func DetectEQBinary() string {
+	return detectEQBinary(exec.LookPath, eqInstallPath)
+}
+
+func detectEQBinary(lookPath func(string) (string, error), fallback string) string {
+	if p, err := lookPath(eqBinaryName); err == nil {
+		return p
+	}
+	if info, err := os.Stat(fallback); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+		return fallback
+	}
+	return ""
+}
+
 // DetectPhysicalOutputs probes which ALSA physical output devices (ch0-ch3) exist.
 // Returns a list of available physical source indices.
 //
@@ -477,5 +513,8 @@ func MockProfile() *HardwareProfile {
 		// carry a digital stream. Tests that need a single-DAC unit set this
 		// explicitly.
 		AvailablePhysicalOutputs: []int{0, 1, 2, 3},
+		// Like the stream binaries above, mock mode claims CamillaDSP is
+		// installed so the EQ UI can be exercised.
+		EQBinary: eqInstallPath,
 	}
 }
