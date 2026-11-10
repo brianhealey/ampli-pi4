@@ -5,6 +5,9 @@ type SourceUpdate struct {
 	ID    *int    `json:"id,omitempty"`
 	Name  *string `json:"name,omitempty"`
 	Input *string `json:"input,omitempty"`
+	// EQ replaces the source's whole EQ setting when present; omitted leaves
+	// it unchanged. Send {"enabled": false, ...} to turn it off.
+	EQ *SourceEQ `json:"eq,omitempty"`
 }
 
 // ZoneUpdate is the PATCH body for updating a zone.

@@ -3,6 +3,7 @@
 	import { api, apiErrorMessage } from '$lib/api';
 	import type { Zone, Group, Source, Stream } from '$lib/types';
 	import { dbToPercent, percentToDb, volFToPercent } from '$lib/volume';
+	import EqPanel from '$lib/components/EqPanel.svelte';
 
 	// Which source name is being edited, and the in-flight text.
 	let editingSource = $state<number | null>(null);
@@ -254,6 +255,9 @@
 						</p>
 					{/if}
 				</div>
+
+				<!-- Per-source EQ (digital streams only) -->
+				<EqPanel {source} available={amplipi.info?.eq_available === true} />
 
 				<!-- Master volume for everything on this source -->
 				{#if total > 0}

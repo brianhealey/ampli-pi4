@@ -3,9 +3,24 @@ package streams
 import (
 	"bytes"
 	"log/slog"
+	"regexp"
 	"sync"
 	"time"
 )
+
+// ansiEscape matches terminal escape sequences: CSI (colours, cursor moves),
+// OSC (terminated by BEL or ST), charset selection and two-byte ESC
+// sequences. Some children (CamillaDSP) colour their log output even when
+// stderr is not a terminal, which leaves the journal full of "\x1b[31m" noise.
+var ansiEscape = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()*+][0-9A-Za-z]|[@-Z\\-_])`)
+
+// stripANSI removes terminal escape sequences from b.
+func stripANSI(b []byte) []byte {
+	if bytes.IndexByte(b, 0x1b) < 0 {
+		return b
+	}
+	return ansiEscape.ReplaceAll(b, nil)
+}
 
 // Limits for forwarding a child process's stderr into the daemon log. A chatty
 // or looping child must not flood the journal: at most childLogMaxLines lines
@@ -72,7 +87,7 @@ func (w *childLogWriter) Close() {
 // emit logs one line, subject to the rate limit. Caller holds w.mu.
 func (w *childLogWriter) emit(line []byte) {
 	line = bytes.TrimRight(line, "\r")
-	line = bytes.TrimSpace(line)
+	line = bytes.TrimSpace(stripANSI(line))
 	if len(line) == 0 {
 		return
 	}

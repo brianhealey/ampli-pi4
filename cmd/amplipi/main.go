@@ -127,6 +127,7 @@ func main() {
 			// The mock profile claims a DAC on every source. On a real unit the
 			// DACs that actually exist decide where digital streams can play.
 			profile.AvailablePhysicalOutputs = hardware.DetectPhysicalOutputs()
+			profile.EQBinary = hardware.DetectEQBinary()
 		}
 	}
 	slog.Info("hardware profile",
@@ -139,6 +140,7 @@ func main() {
 		"digital_sources", profile.DigitalSources(),
 	)
 	slog.Info("stream capabilities", "available", profile.AvailableStreamTypes())
+	slog.Info("per-source EQ", "available", profile.EQAvailable(), "camilladsp", profile.EQBinary)
 
 	// Config store
 	store := config.NewJSONStore(*cfgDir)
@@ -166,6 +168,11 @@ func main() {
 			ctrlRef.UpdateStreamInfo(id, info)
 		}
 	})
+
+	// Per-source EQ bridges run CamillaDSP when it is installed.
+	if profile.EQAvailable() {
+		streamMgr.SetEQBinary(profile.EQBinary)
+	}
 
 	// Controller
 	ctrl, err := controller.New(hw, profile, store, bus, streamMgr)

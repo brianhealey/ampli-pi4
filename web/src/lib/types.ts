@@ -7,6 +7,40 @@ export interface Source {
 	// false when no DAC feeds this source on this unit: only its analog RCA
 	// input can play here. Omitted when the source has a DAC.
 	has_dac?: boolean;
+	// Parametric EQ for digital streams on this source. Omitted when never set.
+	eq?: SourceEQ;
+	// Whether the EQ is being applied; only present when eq is set.
+	eq_status?: EQStatus;
+}
+
+export type EQBandType = 'peaking' | 'lowshelf' | 'highshelf';
+
+export interface EQBand {
+	type: EQBandType;
+	freq: number; // Hz, 20-20000
+	gain: number; // dB, -12..12
+	q: number; // 0.1-10
+}
+
+export interface SourceEQ {
+	enabled: boolean;
+	preamp_db: number; // -24..0
+	bands: EQBand[]; // at most 10
+}
+
+export type EQState =
+	| 'off'
+	| 'active'
+	| 'starting'
+	| 'idle'
+	| 'analog'
+	| 'no_dac'
+	| 'unavailable'
+	| 'failed';
+
+export interface EQStatus {
+	state: EQState;
+	reason?: string;
 }
 
 export interface Zone {
@@ -81,6 +115,7 @@ export interface Info {
 	firmware_version?: string;
 	fan_mode?: string;
 	available_streams?: string[];
+	eq_available?: boolean; // CamillaDSP installed: per-source EQ can run
 }
 
 export interface State {
@@ -96,6 +131,7 @@ export interface State {
 export interface SourceUpdate {
 	name?: string;
 	input?: string;
+	eq?: SourceEQ; // replaces the whole EQ; omit to leave it unchanged
 }
 
 export interface ZoneUpdate {

@@ -19,12 +19,13 @@ type FMRadioStream struct {
 	name string
 	freq string // e.g. "96.5M"
 
-	mu    sync.Mutex
-	rtl   *exec.Cmd
-	aplay *exec.Cmd
-	loop  *ALSALoop
-	vsrc  int
-	done  chan struct{}
+	mu        sync.Mutex
+	rtl       *exec.Cmd
+	aplay     *exec.Cmd
+	loop      bridge
+	newBridge bridgeFactory // nil: alsaloop
+	vsrc      int
+	done      chan struct{}
 
 	info   models.StreamInfo
 	infoMu sync.RWMutex
@@ -161,12 +162,22 @@ func (s *FMRadioStream) Connect(ctx context.Context, physSrc int) error {
 	if s.loop != nil {
 		_ = s.loop.Stop()
 	}
-	loop, err := NewALSALoop(s.vsrc, physSrc)
+	newBridge := s.newBridge
+	if newBridge == nil {
+		newBridge = newALSALoopBridge
+	}
+	loop, err := newBridge(s.vsrc, physSrc)
 	if err != nil {
 		return fmt.Errorf("alsaloop creation failed: %w", err)
 	}
 	s.loop = loop
 	return s.loop.Start(ctx)
+}
+
+func (s *FMRadioStream) setBridgeFactory(f bridgeFactory) {
+	s.mu.Lock()
+	s.newBridge = f
+	s.mu.Unlock()
 }
 
 // Disconnect stops the ALSA loop bridge.

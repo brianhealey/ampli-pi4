@@ -73,11 +73,38 @@ func writeFileAtomic(path string, content []byte) error {
 	return os.Rename(tmp, path)
 }
 
+// bridge is the running connection from a stream's loopback to its source's
+// DAC: an ALSALoop, or an eqBridge (CamillaDSP) when the source has EQ.
+type bridge interface {
+	Start(ctx context.Context) error
+	Stop() error
+}
+
+// bridgeFactory builds the bridge for vsrc -> physSrc. The Manager provides
+// one that picks CamillaDSP for sources with an enabled EQ; without it every
+// connection uses alsaloop.
+type bridgeFactory func(vsrc, physSrc int) (bridge, error)
+
+// bridgeSetter is implemented by streams that bridge through the loopback.
+type bridgeSetter interface {
+	setBridgeFactory(f bridgeFactory)
+}
+
+// newALSALoopBridge is the default bridge: alsaloop, exactly as before EQ.
+func newALSALoopBridge(vsrc, physSrc int) (bridge, error) {
+	l, err := NewALSALoop(vsrc, physSrc)
+	if err != nil {
+		return nil, err // never a typed-nil interface
+	}
+	return l, nil
+}
+
 // SubprocStream embeds a Supervisor and ALSALoop.
 // Stream types can embed this and override what they need.
 type SubprocStream struct {
 	sup       *Supervisor
-	loop      *ALSALoop
+	loop      bridge
+	newBridge bridgeFactory // nil: alsaloop
 	vsrc      int
 	configDir string
 
@@ -121,13 +148,19 @@ func (ss *SubprocStream) connectBase(ctx context.Context, physSrc int) error {
 	if ss.loop != nil {
 		_ = ss.loop.Stop()
 	}
-	loop, err := NewALSALoop(ss.vsrc, physSrc)
+	newBridge := ss.newBridge
+	if newBridge == nil {
+		newBridge = newALSALoopBridge
+	}
+	loop, err := newBridge(ss.vsrc, physSrc)
 	if err != nil {
 		return fmt.Errorf("alsaloop creation failed: %w", err)
 	}
 	ss.loop = loop
 	return ss.loop.Start(ctx)
 }
+
+func (ss *SubprocStream) setBridgeFactory(f bridgeFactory) { ss.newBridge = f }
 
 // disconnectBase stops the ALSA loop.
 func (ss *SubprocStream) disconnectBase(ctx context.Context) error {

@@ -2,6 +2,7 @@ package streams
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,6 +25,33 @@ type Manager struct {
 	vsources  *VSRCAllocator
 	configDir string // ~/.config/amplipi/srcs/
 	onChange  func(streamID int, info models.StreamInfo)
+
+	// Per-source EQ. eqBinary is the CamillaDSP path ("" = not installed:
+	// every connection uses alsaloop). eqByPhys holds the EQ to apply per
+	// physical source, only for enabled EQs. conns records which kind of
+	// bridge each connected vsrc got. All three under mu.
+	eqBinary string
+	eqByPhys map[int]*models.SourceEQ
+	conns    map[int]connBridge
+
+	// Runtime EQ state per physical source, reported by running bridges.
+	// Separate lock: read by the controller while it holds its own lock.
+	statusMu   sync.Mutex
+	eqStatus   map[int]eqRuntime
+	onEQChange func()
+}
+
+// connBridge is the bridge a connected stream's vsrc got from newBridge.
+type connBridge struct {
+	key string    // eqKey of the EQ it was built with; "" for alsaloop
+	eq  *eqBridge // nil for alsaloop
+}
+
+// eqRuntime is the last state a bridge reported for its physical source.
+type eqRuntime struct {
+	owner  *eqBridge
+	state  string
+	reason string
 }
 
 // NewManager creates a new stream Manager.
@@ -38,7 +66,171 @@ func NewManager(configDir string, onChange func(int, models.StreamInfo)) *Manage
 		vsources:  NewVSRCAllocator(),
 		configDir: configDir,
 		onChange:  onChange,
+		conns:     make(map[int]connBridge),
+		eqStatus:  make(map[int]eqRuntime),
 	}
+}
+
+// SetEQBinary enables per-source EQ with the given CamillaDSP binary. Empty
+// (the default) means EQ is never applied and every bridge is alsaloop.
+func (m *Manager) SetEQBinary(path string) {
+	m.mu.Lock()
+	m.eqBinary = path
+	m.mu.Unlock()
+}
+
+// SetEQStatusListener registers fn to be called (from any goroutine, with no
+// Manager lock held) whenever a source's runtime EQ state changes.
+func (m *Manager) SetEQStatusListener(fn func()) {
+	m.statusMu.Lock()
+	m.onEQChange = fn
+	m.statusMu.Unlock()
+}
+
+// EQStatus returns the runtime EQ state of the CamillaDSP bridge feeding
+// physical source physSrc, if one is running. Takes only the status lock, so
+// it is safe to call while holding other locks.
+func (m *Manager) EQStatus(physSrc int) (models.EQStatus, bool) {
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+	st, ok := m.eqStatus[physSrc]
+	if !ok {
+		return models.EQStatus{}, false
+	}
+	return models.EQStatus{State: st.state, Reason: st.reason}, true
+}
+
+// reportEQ records a bridge's state for its source. Entries are owned by the
+// bridge that wrote them, so a bridge stopping late cannot clear the state of
+// the one that replaced it.
+func (m *Manager) reportEQ(b *eqBridge, state, reason string) {
+	m.statusMu.Lock()
+	cur, ok := m.eqStatus[b.physSrc]
+	switch {
+	case state == "":
+		if !ok || cur.owner != b {
+			m.statusMu.Unlock()
+			return
+		}
+		delete(m.eqStatus, b.physSrc)
+	case ok && cur.owner == b && cur.state == state && cur.reason == reason:
+		m.statusMu.Unlock()
+		return
+	default:
+		m.eqStatus[b.physSrc] = eqRuntime{owner: b, state: state, reason: reason}
+	}
+	fn := m.onEQChange
+	m.statusMu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// eqKey fingerprints an EQ setting; "" for none.
+func eqKey(eq *models.SourceEQ) string {
+	if eq == nil {
+		return ""
+	}
+	b, _ := json.Marshal(eq)
+	return string(b)
+}
+
+// newBridge is the bridgeFactory given to every stream: CamillaDSP when the
+// destination source has an enabled EQ and CamillaDSP is installed, alsaloop
+// otherwise. Called from Streamer.Connect, which only Sync calls, with m.mu
+// held.
+func (m *Manager) newBridge(vsrc, physSrc int) (bridge, error) {
+	// The alsaloop bridge also validates that physSrc has a DAC, and is the
+	// EQ bridge's fallback.
+	loop, err := newALSALoopBridge(vsrc, physSrc)
+	if err != nil {
+		return nil, err
+	}
+	eq := m.eqByPhys[physSrc]
+	if eq == nil {
+		m.conns[vsrc] = connBridge{}
+		return loop, nil
+	}
+	eb := newEQBridge(vsrc, physSrc, m.eqBinary, m.configDir, *eq, loop, m.reportEQ)
+	m.conns[vsrc] = connBridge{key: eqKey(eq), eq: eb}
+	return eb, nil
+}
+
+// effectiveEQs returns the EQ to apply per physical source: enabled EQs only,
+// and none at all without CamillaDSP.
+func effectiveEQs(sources []models.Source, eqBinary string) map[int]*models.SourceEQ {
+	out := make(map[int]*models.SourceEQ)
+	if eqBinary == "" {
+		return out
+	}
+	for _, src := range sources {
+		if src.EQ != nil && src.EQ.Enabled {
+			out[src.ID] = src.EQ.Clone()
+		}
+	}
+	return out
+}
+
+// connect connects a stream to physSrc, activating it first if needed.
+// Must be called with m.mu held.
+func (m *Manager) connect(ctx context.Context, id int, state *StreamState, physSrc int, name string) {
+	// Activate if not yet active
+	if !state.Active {
+		if err := m.activateStream(ctx, state, name); err != nil {
+			slog.Error("stream manager: failed to activate stream for connect", "id", id, "err", err)
+			return
+		}
+	}
+
+	slog.Info("stream manager: connecting stream", "id", id, "physSrc", physSrc)
+	if err := state.Streamer.Connect(ctx, physSrc); err != nil {
+		slog.Error("stream manager: connect error", "id", id, "physSrc", physSrc, "err", err)
+		// Do not leave a stream that cannot be heard reporting "playing".
+		if errors.Is(err, ErrPhysicalOutputUnavailable) && m.onChange != nil {
+			m.onChange(id, models.StreamInfo{
+				Name:  name,
+				State: "unavailable",
+				Track: err.Error(),
+			})
+		}
+	} else {
+		state.PhysSrc = physSrc
+	}
+}
+
+// disconnect disconnects a connected stream. Must be called with m.mu held.
+func (m *Manager) disconnect(ctx context.Context, id int, state *StreamState, what string) {
+	if err := state.Streamer.Disconnect(ctx); err != nil {
+		slog.Warn("stream manager: disconnect error"+what, "id", id, "err", err)
+	}
+	state.PhysSrc = -1
+	delete(m.conns, state.VSRC)
+}
+
+// reconcileEQ brings a connected stream's bridge in line with its source's
+// EQ: an EQ turned on or off swaps the bridge type (a short gap), a changed
+// EQ is pushed to the running CamillaDSP. With no EQ anywhere this is a
+// no-op. Must be called with m.mu held.
+func (m *Manager) reconcileEQ(ctx context.Context, id int, state *StreamState, name string) {
+	conn, ok := m.conns[state.VSRC]
+	if !ok {
+		return
+	}
+	want := m.eqByPhys[state.PhysSrc]
+	wantKey := eqKey(want)
+	if wantKey == conn.key {
+		return
+	}
+	if (want == nil) != (conn.eq == nil) {
+		physSrc := state.PhysSrc
+		slog.Info("stream manager: source EQ toggled, swapping bridge", "id", id, "physSrc", physSrc, "eq", want != nil)
+		m.disconnect(ctx, id, state, " before bridge swap")
+		m.connect(ctx, id, state, physSrc, name)
+		return
+	}
+	conn.eq.Update(*want)
+	conn.key = wantKey
+	m.conns[state.VSRC] = conn
 }
 
 // Sync reconciles the manager's running streamers with the desired model state.
@@ -46,6 +238,8 @@ func NewManager(configDir string, onChange func(int, models.StreamInfo)) *Manage
 func (m *Manager) Sync(ctx context.Context, modelStreams []models.Stream, sources []models.Source) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.eqByPhys = effectiveEQs(sources, m.eqBinary)
 
 	// Build a map of streamID → physSrc from the sources configuration
 	streamToPhysSrc := make(map[int]int)
@@ -79,9 +273,7 @@ func (m *Manager) Sync(ctx context.Context, modelStreams []models.Stream, source
 				slog.Info("stream manager: removing stream", "id", id)
 			}
 			if state.PhysSrc >= 0 {
-				if err := state.Streamer.Disconnect(ctx); err != nil {
-					slog.Warn("stream manager: disconnect error on removal", "id", id, "err", err)
-				}
+				m.disconnect(ctx, id, state, " on removal")
 			}
 			if state.Active {
 				if err := state.Streamer.Deactivate(ctx); err != nil {
@@ -114,6 +306,9 @@ func (m *Manager) Sync(ctx context.Context, modelStreams []models.Stream, source
 			if err != nil {
 				slog.Error("stream manager: could not create streamer", "id", id, "type", stream.Type, "err", err)
 				continue
+			}
+			if bs, ok := streamer.(bridgeSetter); ok {
+				bs.setBridgeFactory(m.newBridge)
 			}
 			state := &StreamState{
 				Streamer:  streamer,
@@ -151,42 +346,18 @@ func (m *Manager) Sync(ctx context.Context, modelStreams []models.Stream, source
 		if shouldConnect && state.PhysSrc != desiredPhysSrc {
 			// Need to connect (or reconnect to different physSrc)
 			if state.PhysSrc >= 0 {
-				if err := state.Streamer.Disconnect(ctx); err != nil {
-					slog.Warn("stream manager: disconnect error before reconnect", "id", id, "err", err)
-				}
-				state.PhysSrc = -1
+				m.disconnect(ctx, id, state, " before reconnect")
 			}
+			m.connect(ctx, id, state, desiredPhysSrc, desiredIDs[id].Name)
 
-			// Activate if not yet active
-			if !state.Active {
-				if err := m.activateStream(ctx, state, desiredIDs[id].Name); err != nil {
-					slog.Error("stream manager: failed to activate stream for connect", "id", id, "err", err)
-					continue
-				}
-			}
-
-			slog.Info("stream manager: connecting stream", "id", id, "physSrc", desiredPhysSrc)
-			if err := state.Streamer.Connect(ctx, desiredPhysSrc); err != nil {
-				slog.Error("stream manager: connect error", "id", id, "physSrc", desiredPhysSrc, "err", err)
-				// Do not leave a stream that cannot be heard reporting "playing".
-				if errors.Is(err, ErrPhysicalOutputUnavailable) && m.onChange != nil {
-					m.onChange(id, models.StreamInfo{
-						Name:  desiredIDs[id].Name,
-						State: "unavailable",
-						Track: err.Error(),
-					})
-				}
-			} else {
-				state.PhysSrc = desiredPhysSrc
-			}
+		} else if shouldConnect && state.VSRC >= 0 {
+			// Connected where it should be: follow EQ changes on its source.
+			m.reconcileEQ(ctx, id, state, desiredIDs[id].Name)
 
 		} else if !shouldConnect && state.PhysSrc >= 0 {
 			// Need to disconnect
 			slog.Info("stream manager: disconnecting stream", "id", id)
-			if err := state.Streamer.Disconnect(ctx); err != nil {
-				slog.Warn("stream manager: disconnect error", "id", id, "err", err)
-			}
-			state.PhysSrc = -1
+			m.disconnect(ctx, id, state, "")
 
 			// Deactivate non-persistent streams when disconnected
 			if !state.Streamer.IsPersistent() && state.Active {
@@ -285,9 +456,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	slog.Info("stream manager: shutting down", "count", len(m.streams))
 	for id, state := range m.streams {
 		if state.PhysSrc >= 0 {
-			if err := state.Streamer.Disconnect(ctx); err != nil {
-				slog.Warn("stream manager: disconnect error on shutdown", "id", id, "err", err)
-			}
+			m.disconnect(ctx, id, state, " on shutdown")
 		}
 		if state.Active {
 			if err := state.Streamer.Deactivate(ctx); err != nil {
