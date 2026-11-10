@@ -4,7 +4,7 @@
 # Usage:
 #   sudo scripts/setup.sh [--skip-build]
 #
-#   --skip-build   Skip all binary build steps (50-55, 70).
+#   --skip-build   Skip all binary build/download steps (50-56, 70).
 #                  Useful for re-runs after an initial build.
 #
 # This script is idempotent: safe to run multiple times.
@@ -24,7 +24,7 @@ for arg in "$@"; do
             echo "Usage: sudo $0 [--skip-build]"
             echo ""
             echo "Options:"
-            echo "  --skip-build   Skip binary build steps (50-55, 70)"
+            echo "  --skip-build   Skip binary build/download steps (50-56, 70)"
             exit 0
             ;;
         *)
@@ -49,7 +49,7 @@ echo ""
 check_pi
 
 if [[ "$SKIP_BUILD" -eq 1 ]]; then
-    warn "--skip-build: binary build steps (50-55, 70) will be skipped"
+    warn "--skip-build: binary build/download steps (50-56, 70) will be skipped"
 fi
 
 mkdir -p "$BUILD_DIR"
@@ -78,8 +78,9 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
     run_lib "53-gmrender.sh"
     run_lib "54-go-librespot.sh"
     run_lib "55-bluealsa.sh"
+    run_lib "56-camilladsp.sh"
 else
-    warn "Skipping build scripts 50-55 (--skip-build)"
+    warn "Skipping build scripts 50-56 (--skip-build)"
 fi
 
 run_lib "60-configs.sh"
