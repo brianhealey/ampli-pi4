@@ -131,6 +131,10 @@ func (c *Controller) LoadPreset(ctx context.Context, id int) (models.State, *mod
 				src.Name = *upd.Name
 			}
 			if upd.Input != nil {
+				if appErr := checkSourceDAC(c.profile, s, *upd.ID, *upd.Input); appErr != nil {
+					appErr.Message = fmt.Sprintf("preset %q: %s", preset.Name, appErr.Message)
+					return appErr
+				}
 				src.Input = *upd.Input
 			}
 		}

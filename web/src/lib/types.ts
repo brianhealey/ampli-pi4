@@ -4,6 +4,9 @@ export interface Source {
 	id: number;
 	name: string;
 	input: string;
+	// false when no DAC feeds this source on this unit: only its analog RCA
+	// input can play here. Omitted when the source has a DAC.
+	has_dac?: boolean;
 }
 
 export interface Zone {

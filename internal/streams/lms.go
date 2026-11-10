@@ -136,7 +136,7 @@ func (s *LMSStream) Type() string        { return "lms" }
 // discoverLMSServer tries to run find_lms_server and parse its stdout.
 // Returns empty string if discovery fails (squeezelite will auto-discover).
 func discoverLMSServer() string {
-	if streamsScriptsDir == "" {
+	if streamsScriptsDir() == "" {
 		return ""
 	}
 	binary := findBinary("find_lms_server")

@@ -62,6 +62,15 @@ func New(hw hardware.Driver, profile *hardware.HardwareProfile, store config.Sto
 		}
 	}
 
+	// A digital stream on a source with no DAC cannot be heard (units without
+	// the USB DAC only have one on source 0). Older configs may contain such
+	// assignments; clear them so state matches what the hardware can do.
+	if cleared := enforceSourceDACs(state, profile); cleared > 0 {
+		if err := store.Save(state); err != nil {
+			slog.Warn("controller: could not persist cleared source inputs", "err", err)
+		}
+	}
+
 	c := &Controller{
 		state:        *state,
 		hw:           hw,

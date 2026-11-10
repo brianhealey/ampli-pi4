@@ -58,6 +58,21 @@ func VirtualOutputDevice(vsrc int) string {
 	return fmt.Sprintf("lb%dc", vsrc)
 }
 
+// loopbackCardIDs are the snd-aloop card IDs created by scripts/lib/30-alsa.sh
+// (the kernel strips the underscore from "Loopback_1", hence "Loopback1").
+var loopbackCardIDs = [...]string{"Loopback", "Loopback1", "Loopback2", "Loopback3", "Loopback4", "Loopback5"}
+
+// VirtualOutputPCM returns the hardware PCM that VirtualOutputDevice(vsrc)
+// plays into, per the shipped asound.conf: lb0c-lb5c are dmix on device 0 of
+// cards Loopback..Loopback5, lb6c-lb11c on device 1 of the same cards. The
+// playback side of that card/device is opened only by the stream on vsrc, so
+// /proc/asound/<card>/pcm<device>p shows whether that stream has its audio
+// output open.
+func VirtualOutputPCM(vsrc int) (card string, device int) {
+	n := len(loopbackCardIDs)
+	return loopbackCardIDs[vsrc%n], vsrc / n
+}
+
 // PhysicalOutputDevice returns the ALSA PCM name for a physical source.
 // Format: "ch{physSrc}" — ch0=HifiBerry, ch1-ch3=USB DAC channels.
 func PhysicalOutputDevice(physSrc int) string {

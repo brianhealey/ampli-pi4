@@ -133,6 +133,7 @@ func (c *Controller) FactoryReset(ctx context.Context) (models.State, *models.Ap
 		// Use profile-aware default state if profile is available
 		*s = models.DefaultStateFromProfile(c.profile)
 		s.Info = info
+		enforceSourceDACs(s, c.profile)
 
 		// Push to hardware
 		return c.applyStateToHW(ctx, *s)
@@ -192,6 +193,9 @@ func (c *Controller) LoadConfig(ctx context.Context, incoming models.State) (mod
 				}
 			}
 		}
+
+		// A restored config may come from a unit with more DACs than this one.
+		enforceSourceDACs(s, c.profile)
 
 		return c.applyStateToHW(ctx, *s)
 	})

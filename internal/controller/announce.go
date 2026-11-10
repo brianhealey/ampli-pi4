@@ -43,9 +43,18 @@ func (c *Controller) Announce(ctx context.Context, req models.AnnounceRequest) (
 	sourceID := 3 // default to source 3
 	if req.SourceID != nil {
 		sourceID = *req.SourceID
+	} else if !c.profile.SourceHasDAC(sourceID) {
+		// The announcement is a digital stream: default to the highest source
+		// that has a DAC (source 0 on units without the USB DAC).
+		if digital := c.profile.DigitalSources(); len(digital) > 0 {
+			sourceID = digital[len(digital)-1]
+		}
 	}
 	if sourceID < 0 || sourceID >= models.MaxSources {
 		return models.State{}, models.ErrBadRequest(fmt.Sprintf("source_id must be 0-%d", models.MaxSources-1))
+	}
+	if !c.profile.SourceHasDAC(sourceID) {
+		return models.State{}, models.ErrBadRequest(noDACMessage(c.profile, sourceID))
 	}
 
 	volF := 0.5 // default to 50% relative volume

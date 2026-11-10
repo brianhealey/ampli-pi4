@@ -123,6 +123,11 @@ func main() {
 	if err != nil {
 		slog.Warn("hardware detection failed, using mock defaults", "err", err)
 		profile = hardware.MockProfile()
+		if !*mock {
+			// The mock profile claims a DAC on every source. On a real unit the
+			// DACs that actually exist decide where digital streams can play.
+			profile.AvailablePhysicalOutputs = hardware.DetectPhysicalOutputs()
+		}
 	}
 	slog.Info("hardware profile",
 		"units", len(profile.Units),
@@ -131,6 +136,7 @@ func main() {
 		"fan_mode", profile.FanMode,
 		"display", profile.Display,
 		"firmware", profile.FirmwareVersion,
+		"digital_sources", profile.DigitalSources(),
 	)
 	slog.Info("stream capabilities", "available", profile.AvailableStreamTypes())
 

@@ -180,6 +180,35 @@ func (p *HardwareProfile) PhysicalOutputAvailable(physSrc int) bool {
 	return false
 }
 
+// SourceHasDAC reports whether preamp source src can carry a digital stream,
+// i.e. whether a DAC (ALSA physical output ch<src>) feeds that source's digital
+// input. Sources without one can only play their analog RCA input.
+//
+// A nil profile, or one whose physical outputs were never detected (nil slice),
+// imposes no restriction: that keeps tests and hand-built profiles behaving as
+// a full 4-DAC unit. Detect always fills the slice on real hardware.
+func (p *HardwareProfile) SourceHasDAC(src int) bool {
+	if p == nil || p.AvailablePhysicalOutputs == nil {
+		return true
+	}
+	return p.PhysicalOutputAvailable(src)
+}
+
+// DigitalSources returns the sources that have a DAC, in ascending order.
+// Nil means "no restriction" (see SourceHasDAC).
+func (p *HardwareProfile) DigitalSources() []int {
+	if p == nil || p.AvailablePhysicalOutputs == nil {
+		return nil
+	}
+	out := make([]int, 0, len(p.AvailablePhysicalOutputs))
+	for src := 0; src < 4; src++ {
+		if p.PhysicalOutputAvailable(src) {
+			out = append(out, src)
+		}
+	}
+	return out
+}
+
 // AvailableStreamTypes returns a slice of stream types with binaries available on this hardware.
 func (p *HardwareProfile) AvailableStreamTypes() []string {
 	var types []string
@@ -250,7 +279,7 @@ func Detect(ctx context.Context, drv Driver) (*HardwareProfile, error) {
 	p.Streams = detectStreamCapabilities()
 
 	// Physical output detection
-	p.AvailablePhysicalOutputs = detectPhysicalOutputs()
+	p.AvailablePhysicalOutputs = DetectPhysicalOutputs()
 
 	return p, nil
 }
@@ -372,7 +401,7 @@ func detectStreamCapabilities() []StreamCapability {
 	return caps
 }
 
-// detectPhysicalOutputs probes which ALSA physical output devices (ch0-ch3) exist.
+// DetectPhysicalOutputs probes which ALSA physical output devices (ch0-ch3) exist.
 // Returns a list of available physical source indices.
 //
 // Hardware variants:
@@ -381,23 +410,23 @@ func detectStreamCapabilities() []StreamCapability {
 //
 // Detection method: Check if ALSA card "cmedia8chint" exists in /proc/asound/cards.
 // If present, ch1-ch3 are available. ch0 (HiFiBerry) is always available on main unit.
-func detectPhysicalOutputs() []int {
+func DetectPhysicalOutputs() []int {
 	// ch0 (HiFiBerry DAC) is always available if main unit is present
 	available := []int{0}
 
 	// Check if USB 8-channel DAC (cmedia8chint) is present
 	cardsData, err := os.ReadFile("/proc/asound/cards")
 	if err != nil {
-		slog.Debug("detectPhysicalOutputs: cannot read /proc/asound/cards", "err", err)
+		slog.Debug("DetectPhysicalOutputs: cannot read /proc/asound/cards", "err", err)
 		return available
 	}
 
 	if strings.Contains(string(cardsData), "cmedia8chint") {
-		slog.Info("detectPhysicalOutputs: USB 8-channel DAC detected (cm edia8chint)")
+		slog.Info("DetectPhysicalOutputs: USB 8-channel DAC detected (cm edia8chint)")
 		// USB DAC provides ch1, ch2, ch3
 		available = append(available, 1, 2, 3)
 	} else {
-		slog.Info("detectPhysicalOutputs: no USB DAC detected, only ch0 (HiFiBerry) available")
+		slog.Info("DetectPhysicalOutputs: no USB DAC detected, only ch0 (HiFiBerry) available")
 	}
 
 	return available
@@ -444,6 +473,9 @@ func MockProfile() *HardwareProfile {
 		Display:                      DisplayNone,
 		Streams:                      mockStreams,
 		FirmwareVersion:              "1.7-deadbeef",
-		AvailablePhysicalOutputs: []int{0}, // Mock mode: only ch0 by default (safer for testing)
+		// Mock mode behaves as a full unit with the USB DAC: every source can
+		// carry a digital stream. Tests that need a single-DAC unit set this
+		// explicitly.
+		AvailablePhysicalOutputs: []int{0, 1, 2, 3},
 	}
 }

@@ -2,10 +2,13 @@ package streams
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +31,7 @@ type Manager struct {
 // onChange is called when a stream's metadata changes.
 func NewManager(configDir string, onChange func(int, models.StreamInfo)) *Manager {
 	// Set the scripts directory for binary discovery
-	streamsScriptsDir = filepath.Join(filepath.Dir(configDir), "streams")
+	setStreamsScriptsDir(filepath.Join(filepath.Dir(configDir), "streams"))
 
 	return &Manager{
 		streams:   make(map[int]*StreamState),
@@ -92,8 +95,11 @@ func (m *Manager) Sync(ctx context.Context, modelStreams []models.Stream, source
 		}
 	}
 
-	// Step 2: Add new streams from model
-	for id, stream := range desiredIDs {
+	// Step 2: Add new streams from model. Walk them in ascending ID order: vsrc
+	// slots are handed out in activation order, and map iteration order is
+	// random, so this keeps each stream on the same vsrc across restarts.
+	for _, id := range slices.Sorted(maps.Keys(desiredIDs)) {
+		stream := desiredIDs[id]
 		if _, exists := m.streams[id]; !exists {
 			slog.Info("stream manager: adding new stream", "id", id, "type", stream.Type, "name", stream.Name)
 			// Create a closure to wrap the onChange callback with the stream ID
@@ -136,8 +142,10 @@ func (m *Manager) Sync(ctx context.Context, modelStreams []models.Stream, source
 		}
 	}
 
-	// Step 3: Reconcile connections for all streams
-	for id, state := range m.streams {
+	// Step 3: Reconcile connections for all streams, in ID order for the same
+	// reason (non-persistent streams get their vsrc here).
+	for _, id := range slices.Sorted(maps.Keys(m.streams)) {
+		state := m.streams[id]
 		desiredPhysSrc, shouldConnect := streamToPhysSrc[id]
 
 		if shouldConnect && state.PhysSrc != desiredPhysSrc {
@@ -159,7 +167,15 @@ func (m *Manager) Sync(ctx context.Context, modelStreams []models.Stream, source
 
 			slog.Info("stream manager: connecting stream", "id", id, "physSrc", desiredPhysSrc)
 			if err := state.Streamer.Connect(ctx, desiredPhysSrc); err != nil {
-				slog.Warn("stream manager: connect error", "id", id, "physSrc", desiredPhysSrc, "err", err)
+				slog.Error("stream manager: connect error", "id", id, "physSrc", desiredPhysSrc, "err", err)
+				// Do not leave a stream that cannot be heard reporting "playing".
+				if errors.Is(err, ErrPhysicalOutputUnavailable) && m.onChange != nil {
+					m.onChange(id, models.StreamInfo{
+						Name:  desiredIDs[id].Name,
+						State: "unavailable",
+						Track: err.Error(),
+					})
+				}
 			} else {
 				state.PhysSrc = desiredPhysSrc
 			}

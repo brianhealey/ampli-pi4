@@ -2,27 +2,42 @@ package streams
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 )
 
 // availablePhysicalOutputs stores which physical DAC outputs (ch0-ch3) exist.
 // Set by the stream manager during initialization.
-var availablePhysicalOutputs = []int{0} // default: ch0 only (HiFiBerry)
+var (
+	physOutputsMu            sync.RWMutex
+	availablePhysicalOutputs = []int{0} // default: ch0 only (HiFiBerry)
+)
 
 // SetAvailablePhysicalOutputs configures which physical DAC outputs (ch0-ch3) are available.
 // Called by the stream manager during initialization with data from the hardware profile.
 func SetAvailablePhysicalOutputs(outputs []int) {
+	physOutputsMu.Lock()
 	availablePhysicalOutputs = make([]int, len(outputs))
 	copy(availablePhysicalOutputs, outputs)
-	slog.Info("alsaloop: available physical outputs configured", "outputs", availablePhysicalOutputs)
+	physOutputsMu.Unlock()
+	slog.Info("alsaloop: available physical outputs configured", "outputs", outputs)
+}
+
+// physicalOutputs returns a copy of the configured physical outputs.
+func physicalOutputs() []int {
+	physOutputsMu.RLock()
+	defer physOutputsMu.RUnlock()
+	return append([]int(nil), availablePhysicalOutputs...)
 }
 
 // isPhysicalOutputAvailable checks if a physical source has a corresponding ALSA device.
 func isPhysicalOutputAvailable(physSrc int) bool {
-	for _, available := range availablePhysicalOutputs {
+	for _, available := range physicalOutputs() {
 		if available == physSrc {
 			return true
 		}
@@ -38,26 +53,31 @@ type ALSALoop struct {
 	sup     *Supervisor
 }
 
+// ErrPhysicalOutputUnavailable is returned when a stream is routed to a source
+// that has no DAC behind it (ch1-ch3 on units without the USB DAC).
+var ErrPhysicalOutputUnavailable = errors.New("physical output not available")
+
 // NewALSALoop creates a new ALSALoop that will bridge vsrc to physSrc.
-// On v1 hardware (without USB DAC), falls back to ch0 for all sources,
-// allowing ALSA's dmix to mix multiple streams together.
+// It fails if physSrc has no ALSA physical output on this unit: audio is never
+// rerouted to another DAC, because the zones listening to physSrc would not
+// hear it there.
 func NewALSALoop(vsrc, physSrc int) (*ALSALoop, error) {
-	// Fall back to ch0 if requested physical output doesn't exist (v1 hardware behavior)
-	actualPhysSrc := physSrc
 	if !isPhysicalOutputAvailable(physSrc) {
-		slog.Warn("alsaloop: physical output not available, falling back to ch0",
-			"requested", physSrc, "available", availablePhysicalOutputs)
-		actualPhysSrc = 0 // Fall back to HiFiBerry DAC (uses dmix for multiple streams)
+		err := fmt.Errorf("alsaloop: source %d (ch%d): %w; available outputs %v",
+			physSrc, physSrc, ErrPhysicalOutputUnavailable, physicalOutputs())
+		slog.Error("alsaloop: refusing to route to a missing DAC",
+			"vsrc", vsrc, "requested", physSrc, "available", physicalOutputs())
+		return nil, err
 	}
 
 	a := &ALSALoop{
 		vsrc:    vsrc,
-		physSrc: actualPhysSrc,
+		physSrc: physSrc,
 	}
 	capture := VirtualCaptureDevice(vsrc)
-	playback := PhysicalOutputDevice(actualPhysSrc)
+	playback := PhysicalOutputDevice(physSrc)
 
-	a.sup = NewSupervisor("alsaloop", func() *exec.Cmd {
+	a.sup = NewSupervisor(fmt.Sprintf("alsaloop/v%d->ch%d", vsrc, physSrc), func() *exec.Cmd {
 		cmd := exec.Command(findBinary("alsaloop"),
 			"-C", capture,
 			"-P", playback,

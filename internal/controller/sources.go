@@ -3,9 +3,11 @@ package controller
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
+	"github.com/micro-nova/amplipi-go/internal/hardware"
 	"github.com/micro-nova/amplipi-go/internal/models"
 )
 
@@ -80,6 +82,9 @@ func (c *Controller) SetSource(ctx context.Context, id int, upd models.SourceUpd
 			src.Name = *upd.Name
 		}
 		if upd.Input != nil {
+			if appErr := checkSourceDAC(c.profile, s, id, *upd.Input); appErr != nil {
+				return appErr
+			}
 			oldInput := src.Input
 			src.Input = *upd.Input
 			if oldInput != *upd.Input {
@@ -97,6 +102,79 @@ func (c *Controller) SetSource(ctx context.Context, id int, upd models.SourceUpd
 		return models.State{}, models.ErrInternal(err.Error())
 	}
 	return state, nil
+}
+
+// digitalStreamFor returns the stream an input selects when that stream needs a
+// DAC (anything other than an RCA/Aux passthrough). It returns nil for analog
+// inputs, the empty input, and references to streams that do not exist.
+func digitalStreamFor(input string, state *models.State) *models.Stream {
+	if !strings.HasPrefix(input, "stream=") || isAnalogInput(input, state) {
+		return nil
+	}
+	id, err := strconv.Atoi(strings.TrimPrefix(input, "stream="))
+	if err != nil {
+		return nil
+	}
+	return findStream(state, id)
+}
+
+// checkSourceDAC rejects a digital stream on a source that no DAC feeds.
+// On units without the USB DAC only source 0 (HiFiBerry) has one; without this
+// check the stream would play into nothing while reporting "playing".
+func checkSourceDAC(profile *hardware.HardwareProfile, state *models.State, srcID int, input string) *models.AppError {
+	if profile.SourceHasDAC(srcID) {
+		return nil
+	}
+	if digitalStreamFor(input, state) == nil {
+		return nil
+	}
+	return models.ErrBadRequest(noDACMessage(profile, srcID))
+}
+
+// noDACMessage explains which sources can carry digital streams on this unit.
+func noDACMessage(profile *hardware.HardwareProfile, srcID int) string {
+	digital := profile.DigitalSources()
+	var where string
+	switch len(digital) {
+	case 0:
+		where = "this unit has no DAC, so digital streams cannot play"
+	case 1:
+		where = fmt.Sprintf("digital streams can only play on source %d", digital[0])
+	default:
+		ids := make([]string, len(digital))
+		for i, d := range digital {
+			ids[i] = strconv.Itoa(d)
+		}
+		where = "digital streams can only play on sources " + strings.Join(ids, ", ")
+	}
+	return fmt.Sprintf("source %d has no digital output on this unit; %s", srcID, where)
+}
+
+// enforceSourceDACs marks each source with whether a DAC feeds it and clears
+// any digital stream sitting on a source without one, logging one warning per
+// cleared source. Used on every path that replaces sources wholesale (startup
+// load, config restore, factory reset) so state never claims a stream is
+// playing somewhere it cannot be heard. Analog inputs are never touched.
+// Returns the number of inputs cleared.
+func enforceSourceDACs(state *models.State, profile *hardware.HardwareProfile) int {
+	cleared := 0
+	for i := range state.Sources {
+		src := &state.Sources[i]
+		if profile.SourceHasDAC(src.ID) {
+			src.HasDAC = nil
+			continue
+		}
+		noDAC := false
+		src.HasDAC = &noDAC
+		if st := digitalStreamFor(src.Input, state); st != nil {
+			slog.Warn("controller: clearing digital stream from source without a DAC",
+				"source", src.ID, "stream_id", st.ID, "stream", st.Name, "type", st.Type,
+				"digital_sources", profile.DigitalSources())
+			src.Input = ""
+			cleared++
+		}
+	}
+	return cleared
 }
 
 // sourceAnalogFlags derives the per-source analog/digital flags from state.

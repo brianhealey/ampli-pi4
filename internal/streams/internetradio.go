@@ -10,6 +10,9 @@ import (
 	"github.com/micro-nova/amplipi-go/internal/models"
 )
 
+// vlcQuitItem is VLC's special playlist item that quits the player when reached.
+const vlcQuitItem = "vlc://quit"
+
 // InternetRadioStream plays an internet radio stream via VLC.
 // It is persistent — VLC keeps the connection alive even when not physically routed.
 type InternetRadioStream struct {
@@ -45,10 +48,23 @@ func (s *InternetRadioStream) Activate(ctx context.Context, vsrc int, configDir 
 			"--alsa-audio-device", device,
 			"--no-video",
 			url,
+			// Second playlist item: VLC moves on to it when the URL fails to
+			// open or the stream ends, and this special item makes VLC quit.
+			// Without it VLC idles forever after a failed open (e.g. network
+			// not up yet at boot) and the supervisor never sees a failure.
+			vlcQuitItem,
 		)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		return cmd
 	})
+	// The network can be down for minutes after boot, and a station can drop
+	// at any time: keep retrying (backoff capped at maxBackoff) rather than
+	// giving up after a few fast failures. A missing vlc binary still gives up.
+	s.sup.retryForever = true
+	// VLC can also stay alive with no audio: if opening the ALSA device fails
+	// (seen transiently at boot) it keeps the station connected with no PCM
+	// open, forever. Restart it when its loopback PCM is not open.
+	watchAudioOutput(s.sup, vsrc)
 
 	s.setInfo(models.StreamInfo{Name: s.name, State: "playing"})
 	return s.activateBase(ctx, vsrc, dir)

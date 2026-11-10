@@ -37,6 +37,20 @@ class APIError extends Error {
 	}
 }
 
+// apiErrorMessage returns the server's explanation for a failed request (the
+// "message" field of the JSON error body), falling back to the error text.
+export function apiErrorMessage(err: unknown): string {
+	if (err instanceof APIError && typeof err.data === 'string') {
+		try {
+			const body = JSON.parse(err.data);
+			if (body && typeof body.message === 'string' && body.message) return body.message;
+		} catch {
+			// not JSON: fall through
+		}
+	}
+	return err instanceof Error ? err.message : String(err);
+}
+
 async function request<T>(
 	endpoint: string,
 	options: RequestInit = {},
