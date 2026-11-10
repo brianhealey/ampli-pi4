@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { amplipi } from '$lib/store.svelte';
-	import { api } from '$lib/api';
+	import { api, apiErrorMessage } from '$lib/api';
 	import type { Group, GroupUpdate } from '$lib/types';
 	import { dbToPercent, percentToDb } from '$lib/volume';
 
@@ -60,7 +60,32 @@
 		return amplipi.streams.filter((stream) => !stream.disabled);
 	}
 
-	async function handleGroupInputChange(groupId: number, inputValue: string) {
+	// Last failed input change per group, shown under its selector.
+	let inputErrors = $state<Record<number, string>>({});
+
+	function currentGroupInput(group: Group): string {
+		return group.source_id !== undefined && group.source_id >= 0
+			? amplipi.getSource(group.source_id)?.input || 'none'
+			: 'none';
+	}
+
+	async function handleGroupInputChange(
+		group: Group,
+		inputValue: string,
+		select: HTMLSelectElement
+	) {
+		try {
+			await applyGroupInput(group.id, inputValue);
+			delete inputErrors[group.id];
+		} catch (err) {
+			console.error('Failed to set group input:', err);
+			inputErrors[group.id] = apiErrorMessage(err);
+			// The change was refused: show the input that is actually selected.
+			select.value = currentGroupInput(group);
+		}
+	}
+
+	async function applyGroupInput(groupId: number, inputValue: string) {
 		if (inputValue === 'none') {
 			// Disconnect from source
 			await api.updateGroup(groupId, { source_id: -1 });
@@ -253,10 +278,8 @@
 					<label for="group-stream-{group.id}" class="sr-only">Select input for {group.name}</label>
 					<select
 						id="group-stream-{group.id}"
-						value={group.source_id !== undefined && group.source_id >= 0
-							? amplipi.getSource(group.source_id)?.input || 'none'
-							: 'none'}
-						onchange={(e) => handleGroupInputChange(group.id, e.currentTarget.value)}
+						value={currentGroupInput(group)}
+						onchange={(e) => handleGroupInputChange(group, e.currentTarget.value, e.currentTarget)}
 						class="w-full rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
 					>
 						<option value="none">No input</option>
@@ -264,6 +287,11 @@
 							<option value="stream={stream.id}">{stream.name}</option>
 						{/each}
 					</select>
+					{#if inputErrors[group.id]}
+						<p class="mt-1 text-xs text-red-600 dark:text-red-400" role="alert">
+							{inputErrors[group.id]}
+						</p>
+					{/if}
 				</div>
 			</div>
 		{/each}

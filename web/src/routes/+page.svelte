@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { amplipi } from '$lib/store.svelte';
-	import { api } from '$lib/api';
-	import type { Zone, Group, Source } from '$lib/types';
+	import { api, apiErrorMessage } from '$lib/api';
+	import type { Zone, Group, Source, Stream } from '$lib/types';
 	import { dbToPercent, percentToDb, volFToPercent } from '$lib/volume';
 
 	// Which source name is being edited, and the in-flight text.
@@ -30,6 +30,27 @@
 			return pinned === null || pinned === sourceId;
 		});
 	}
+
+	// RCA and Aux are analog passthroughs; every other stream type is digital and
+	// needs a DAC feeding the source. Units without the USB DAC only have one on
+	// the first source.
+	function isDigital(stream: Stream): boolean {
+		return stream.type !== 'rca' && stream.type !== 'aux';
+	}
+
+	function digitalBlocked(source: Source, stream: Stream): boolean {
+		return source.has_dac === false && isDigital(stream);
+	}
+
+	const dacSourceNames = $derived(
+		amplipi.sources
+			.filter((s) => s.has_dac !== false)
+			.map((s) => s.name)
+			.join(', ')
+	);
+
+	// Last failed input change per source, shown under its selector.
+	let inputErrors = $state<Record<number, string>>({});
 
 	function groupsOn(sourceId: number): Group[] {
 		return amplipi.groups.filter((g) =>
@@ -70,11 +91,15 @@
 		return Math.round(avg);
 	}
 
-	async function setSourceInput(sourceId: number, input: string) {
+	async function setSourceInput(source: Source, input: string, select: HTMLSelectElement) {
 		try {
-			await api.updateSource(sourceId, { input });
+			await api.updateSource(source.id, { input });
+			delete inputErrors[source.id];
 		} catch (err) {
 			console.error('Failed to set source input:', err);
+			inputErrors[source.id] = apiErrorMessage(err);
+			// The change was refused: show the input that is actually playing.
+			select.value = source.input || '';
 		}
 	}
 
@@ -205,18 +230,29 @@
 					<select
 						id="source-input-{source.id}"
 						value={source.input || ''}
-						onchange={(e) => setSourceInput(source.id, e.currentTarget.value)}
+						onchange={(e) => setSourceInput(source, e.currentTarget.value, e.currentTarget)}
 						class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
 					>
 						<option value="">None</option>
 						{#each streamsFor(source.id) as stream (stream.id)}
-							<option value="stream={stream.id}">
+							<option value="stream={stream.id}" disabled={digitalBlocked(source, stream)}>
 								{stream.name}{stream.type === 'rca' && stream.config?.index !== undefined
 									? ` (RCA ${(stream.config.index as number) + 1})`
-									: ''}
+									: ''}{digitalBlocked(source, stream) ? ' (needs a DAC)' : ''}
 							</option>
 						{/each}
 					</select>
+					{#if source.has_dac === false}
+						<p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+							No DAC on this source: only its RCA input plays here. Digital streams can play
+							on {dacSourceNames || 'no source on this unit'}.
+						</p>
+					{/if}
+					{#if inputErrors[source.id]}
+						<p class="mt-1 text-xs text-red-600 dark:text-red-400" role="alert">
+							{inputErrors[source.id]}
+						</p>
+					{/if}
 				</div>
 
 				<!-- Master volume for everything on this source -->
