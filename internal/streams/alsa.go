@@ -92,7 +92,6 @@ func NewALSALoop(vsrc, physSrc int) (*ALSALoop, error) {
 	a.sup.fastFailSec = 3.0
 	a.sup.backoff = 500 * time.Millisecond
 	a.sup.maxBackoff = 30 * time.Second
-	a.sup.logStderr = true
 
 	return a, nil
 }

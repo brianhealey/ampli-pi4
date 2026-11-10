@@ -61,7 +61,10 @@ func (s *InternetRadioStream) Activate(ctx context.Context, vsrc int, configDir 
 	// at any time: keep retrying (backoff capped at maxBackoff) rather than
 	// giving up after a few fast failures. A missing vlc binary still gives up.
 	s.sup.retryForever = true
-	s.sup.logStderr = true
+	// VLC can also stay alive with no audio: if opening the ALSA device fails
+	// (seen transiently at boot) it keeps the station connected with no PCM
+	// open, forever. Restart it when its loopback PCM is not open.
+	watchAudioOutput(s.sup, vsrc)
 
 	s.setInfo(models.StreamInfo{Name: s.name, State: "playing"})
 	return s.activateBase(ctx, vsrc, dir)

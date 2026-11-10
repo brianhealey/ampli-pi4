@@ -88,8 +88,8 @@ func (s *PandoraStream) Activate(ctx context.Context, vsrc int, configDir string
 	}
 
 	// Try to copy eventcmd.sh from the streams scripts dir (override if exists)
-	if streamsScriptsDir != "" {
-		src := filepath.Join(streamsScriptsDir, "eventcmd.sh")
+	if dir := streamsScriptsDir(); dir != "" {
+		src := filepath.Join(dir, "eventcmd.sh")
 		if data, err := os.ReadFile(src); err == nil {
 			if err2 := os.WriteFile(eventcmdPath, data, 0755); err2 != nil {
 				slog.Warn("pandora: could not copy eventcmd.sh from scripts dir", "err", err2)

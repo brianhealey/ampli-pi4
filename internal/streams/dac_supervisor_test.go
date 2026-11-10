@@ -235,6 +235,9 @@ func TestInternetRadio_VLCQuitsOnFailureAndRetriesForever(t *testing.T) {
 	if !sup.logStderr {
 		t.Error("internet radio supervisor should log stderr")
 	}
+	if sup.healthCheck == nil || sup.healthGrace != pcmWatchGrace {
+		t.Error("internet radio supervisor should watch its audio output")
+	}
 }
 
 // ─── Child stderr logging ────────────────────────────────────────────────────

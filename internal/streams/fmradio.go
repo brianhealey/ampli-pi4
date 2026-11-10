@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/micro-nova/amplipi-go/internal/models"
 )
@@ -74,6 +75,14 @@ func (s *FMRadioStream) Activate(ctx context.Context, vsrc int, configDir string
 	)
 	aplayCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+	// This pipeline is not run by a Supervisor; log its stderr the same way.
+	rtlLog := newChildLogWriter("fm_radio/" + s.name + "/rtl_fm")
+	aplayLog := newChildLogWriter("fm_radio/" + s.name + "/aplay")
+	rtlCmd.Stderr = rtlLog
+	aplayCmd.Stderr = aplayLog
+	rtlCmd.WaitDelay = 2 * time.Second
+	aplayCmd.WaitDelay = 2 * time.Second
+
 	// Pipe rtl_fm stdout → aplay stdin
 	pipe, err := rtlCmd.StdoutPipe()
 	if err != nil {
@@ -99,6 +108,8 @@ func (s *FMRadioStream) Activate(ctx context.Context, vsrc int, configDir string
 		defer close(s.done)
 		_ = rtlCmd.Wait()
 		_ = aplayCmd.Wait()
+		rtlLog.Close()
+		aplayLog.Close()
 		slog.Info("fm_radio: pipeline exited", "name", s.name)
 		s.infoMu.Lock()
 		s.info.State = "stopped"

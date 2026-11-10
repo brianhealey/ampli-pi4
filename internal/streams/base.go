@@ -8,13 +8,22 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/micro-nova/amplipi-go/internal/models"
 )
 
-// streamsScriptsDir is set by the Manager so stream implementations
-// can find bundled scripts and binaries.
-var streamsScriptsDir string
+// streamsScriptsDirV is set by the Manager so stream implementations can find
+// bundled scripts and binaries. It is read from supervisor goroutines, hence
+// atomic.
+var streamsScriptsDirV atomic.Value // string
+
+func setStreamsScriptsDir(dir string) { streamsScriptsDirV.Store(dir) }
+
+func streamsScriptsDir() string {
+	dir, _ := streamsScriptsDirV.Load().(string)
+	return dir
+}
 
 // findBinary searches for a binary by name in order:
 //  1. exec.LookPath (PATH)
@@ -27,8 +36,8 @@ func findBinary(name string) string {
 	if p := filepath.Join("/usr/bin", name); fileExists(p) {
 		return p
 	}
-	if streamsScriptsDir != "" {
-		if p := filepath.Join(streamsScriptsDir, name); fileExists(p) {
+	if dir := streamsScriptsDir(); dir != "" {
+		if p := filepath.Join(dir, name); fileExists(p) {
 			return p
 		}
 	}

@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	defaultMaxFails    = 5
-	defaultFastFailSec = 5.0
-	defaultMaxBackoff  = 30 * time.Second
-	backoffReset       = 30 * time.Second // reset backoff if process ran this long
-	sigtermTimeout     = 3 * time.Second
+	defaultMaxFails       = 5
+	defaultFastFailSec    = 5.0
+	defaultMaxBackoff     = 30 * time.Second
+	defaultInitialBackoff = 500 * time.Millisecond
+	backoffReset          = 30 * time.Second // reset backoff if process ran this long
+	sigtermTimeout        = 3 * time.Second
 )
 
 // Supervisor manages a single subprocess with restart logic.
@@ -29,8 +30,8 @@ type Supervisor struct {
 	maxFails    int
 	fastFailSec float64
 	maxBackoff  time.Duration
-	runOnce     bool                // If true, don't restart after process exits
-	onExit      func(error)         // Called when process exits (before restart decision)
+	runOnce     bool        // If true, don't restart after process exits
+	onExit      func(error) // Called when process exits (before restart decision)
 
 	// retryForever keeps restarting after maxFails fast failures instead of
 	// giving up, with the backoff still capped at maxBackoff. For processes
@@ -40,16 +41,32 @@ type Supervisor struct {
 
 	// logStderr forwards the child's stderr to the daemon log (rate-limited,
 	// see childLogWriter) when the command does not already set cmd.Stderr.
+	// On by default so any child's failure is visible in the journal.
 	logStderr bool
 
+	// initialBackoff is the delay before the first restart, and what the
+	// backoff returns to after a process has run for backoffReset.
+	initialBackoff time.Duration
+
+	// healthCheck, if set, is polled every healthInterval once the process has
+	// run for healthGrace. After healthFailures consecutive errors the process
+	// group is killed and the exit is treated as a fast failure, so the normal
+	// restart and backoff apply. It is for processes that stay alive but stop
+	// doing their job (e.g. a player that lost its audio output). It must
+	// return nil when health cannot be determined.
+	healthCheck    func() error
+	healthGrace    time.Duration
+	healthInterval time.Duration
+	healthFailures int
+
 	// Internal state (protected by mu)
-	mu           sync.Mutex
-	currentPID   int
-	backoff      time.Duration
-	failCount    int
-	stopCh       chan struct{}
-	doneCh       chan struct{}
-	running      bool
+	mu         sync.Mutex
+	currentPID int
+	backoff    time.Duration
+	failCount  int
+	stopCh     chan struct{}
+	doneCh     chan struct{}
+	running    bool
 }
 
 // NewSupervisor creates a Supervisor with sensible defaults.
@@ -60,7 +77,10 @@ func NewSupervisor(name string, buildCmd func() *exec.Cmd) *Supervisor {
 		maxFails:    defaultMaxFails,
 		fastFailSec: defaultFastFailSec,
 		maxBackoff:  defaultMaxBackoff,
-		backoff:     500 * time.Millisecond,
+		backoff:     defaultInitialBackoff,
+		logStderr:   true,
+
+		initialBackoff: defaultInitialBackoff,
 	}
 }
 
@@ -76,7 +96,7 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	s.stopCh = make(chan struct{})
 	s.doneCh = make(chan struct{})
 	s.failCount = 0
-	s.backoff = 500 * time.Millisecond
+	s.backoff = s.initialBackoff
 	s.running = true
 	go s.supervise(ctx)
 	return nil
@@ -197,34 +217,78 @@ func (s *Supervisor) supervise(ctx context.Context) {
 			exitCh <- cmd.Wait()
 		}()
 
-		var exitErr error
-		select {
-		case exitErr = <-exitCh:
-		case <-s.stopCh:
-			s.killProcess(pid)
-			// Wait for process exit with timeout to prevent goroutine leak
-			select {
-			case <-exitCh:
-				if stderrLog != nil {
-					stderrLog.Close()
-				}
-			case <-time.After(10 * time.Second):
-				slog.Error("supervisor: process won't die, leaking wait goroutine", "name", s.name, "pid", pid)
-			}
-			return
-		case <-ctx.Done():
-			s.killProcess(pid)
-			// Wait for process exit with timeout to prevent goroutine leak
-			select {
-			case <-exitCh:
-				if stderrLog != nil {
-					stderrLog.Close()
-				}
-			case <-time.After(10 * time.Second):
-				slog.Error("supervisor: process won't die, leaking wait goroutine", "name", s.name, "pid", pid)
-			}
-			return
+		var healthTick <-chan time.Time
+		var healthTicker *time.Ticker
+		if s.healthCheck != nil && s.healthInterval > 0 {
+			healthTicker = time.NewTicker(s.healthInterval)
+			healthTick = healthTicker.C
 		}
+		stopHealth := func() {
+			if healthTicker != nil {
+				healthTicker.Stop()
+				healthTick = nil
+			}
+		}
+		// unhealthy: killed by the health check without ever having passed it,
+		// i.e. the process never did its job this run.
+		unhealthy := false
+		sawHealthy := false
+		healthErrs := 0
+
+		var exitErr error
+	wait:
+		for {
+			select {
+			case exitErr = <-exitCh:
+				break wait
+			case <-healthTick:
+				if time.Since(startTime) < s.healthGrace {
+					continue
+				}
+				err := s.healthCheck()
+				if err == nil {
+					healthErrs = 0
+					sawHealthy = true
+					continue
+				}
+				healthErrs++
+				if healthErrs < max(s.healthFailures, 1) {
+					continue
+				}
+				slog.Warn("supervisor: process alive but unhealthy, killing it to restart",
+					"name", s.name, "pid", pid, "reason", err, "running_for", time.Since(startTime).Round(time.Second))
+				unhealthy = !sawHealthy
+				stopHealth()
+				s.killProcess(pid)
+			case <-s.stopCh:
+				s.killProcess(pid)
+				// Wait for process exit with timeout to prevent goroutine leak
+				select {
+				case <-exitCh:
+					if stderrLog != nil {
+						stderrLog.Close()
+					}
+				case <-time.After(10 * time.Second):
+					slog.Error("supervisor: process won't die, leaking wait goroutine", "name", s.name, "pid", pid)
+				}
+				stopHealth()
+				return
+			case <-ctx.Done():
+				s.killProcess(pid)
+				// Wait for process exit with timeout to prevent goroutine leak
+				select {
+				case <-exitCh:
+					if stderrLog != nil {
+						stderrLog.Close()
+					}
+				case <-time.After(10 * time.Second):
+					slog.Error("supervisor: process won't die, leaking wait goroutine", "name", s.name, "pid", pid)
+				}
+				stopHealth()
+				return
+			}
+		}
+		stopHealth()
 
 		elapsed := time.Since(startTime)
 		if stderrLog != nil {
@@ -246,11 +310,12 @@ func (s *Supervisor) supervise(ctx context.Context) {
 		s.mu.Lock()
 		s.currentPID = 0
 
-		if elapsed >= backoffReset {
+		if elapsed >= backoffReset && !unhealthy {
 			// Ran long enough — reset fail tracking and backoff
 			s.failCount = 0
-			s.backoff = 500 * time.Millisecond
-		} else if elapsed.Seconds() < s.fastFailSec {
+			s.backoff = s.initialBackoff
+		} else if elapsed.Seconds() < s.fastFailSec || unhealthy {
+			// Exit status is irrelevant: VLC exits 0 when its URL fails.
 			s.failCount++
 			s.backoff = minDuration(s.backoff*2, s.maxBackoff)
 		} else {
