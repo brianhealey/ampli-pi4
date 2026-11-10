@@ -2,6 +2,7 @@ package streams
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -159,7 +160,15 @@ func (m *Manager) Sync(ctx context.Context, modelStreams []models.Stream, source
 
 			slog.Info("stream manager: connecting stream", "id", id, "physSrc", desiredPhysSrc)
 			if err := state.Streamer.Connect(ctx, desiredPhysSrc); err != nil {
-				slog.Warn("stream manager: connect error", "id", id, "physSrc", desiredPhysSrc, "err", err)
+				slog.Error("stream manager: connect error", "id", id, "physSrc", desiredPhysSrc, "err", err)
+				// Do not leave a stream that cannot be heard reporting "playing".
+				if errors.Is(err, ErrPhysicalOutputUnavailable) && m.onChange != nil {
+					m.onChange(id, models.StreamInfo{
+						Name:  desiredIDs[id].Name,
+						State: "unavailable",
+						Track: err.Error(),
+					})
+				}
 			} else {
 				state.PhysSrc = desiredPhysSrc
 			}

@@ -32,6 +32,16 @@ type Supervisor struct {
 	runOnce     bool                // If true, don't restart after process exits
 	onExit      func(error)         // Called when process exits (before restart decision)
 
+	// retryForever keeps restarting after maxFails fast failures instead of
+	// giving up, with the backoff still capped at maxBackoff. For processes
+	// whose failures are usually transient (network not up yet at boot). A
+	// missing binary still gives up immediately.
+	retryForever bool
+
+	// logStderr forwards the child's stderr to the daemon log (rate-limited,
+	// see childLogWriter) when the command does not already set cmd.Stderr.
+	logStderr bool
+
 	// Internal state (protected by mu)
 	mu           sync.Mutex
 	currentPID   int
@@ -126,9 +136,15 @@ func (s *Supervisor) supervise(ctx context.Context) {
 		// Check fail limit
 		s.mu.Lock()
 		if s.failCount >= s.maxFails {
-			slog.Error("supervisor giving up after too many fast-fails", "name", s.name, "fails", s.failCount)
-			s.mu.Unlock()
-			return
+			if !s.retryForever {
+				slog.Error("supervisor giving up after too many fast-fails", "name", s.name, "fails", s.failCount)
+				s.mu.Unlock()
+				return
+			}
+			if s.failCount == s.maxFails {
+				slog.Warn("supervisor: still failing, will keep retrying",
+					"name", s.name, "fails", s.failCount, "max_backoff", s.maxBackoff)
+			}
 		}
 		s.mu.Unlock()
 
@@ -139,6 +155,13 @@ func (s *Supervisor) supervise(ctx context.Context) {
 			return
 		}
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		var stderrLog *childLogWriter
+		if s.logStderr && cmd.Stderr == nil {
+			stderrLog = newChildLogWriter(s.name)
+			cmd.Stderr = stderrLog
+			// A grandchild holding stderr open must not block Wait forever.
+			cmd.WaitDelay = 2 * time.Second
+		}
 
 		startTime := time.Now()
 		slog.Info("supervisor: starting process", "name", s.name, "cmd", cmd.Path)
@@ -182,6 +205,9 @@ func (s *Supervisor) supervise(ctx context.Context) {
 			// Wait for process exit with timeout to prevent goroutine leak
 			select {
 			case <-exitCh:
+				if stderrLog != nil {
+					stderrLog.Close()
+				}
 			case <-time.After(10 * time.Second):
 				slog.Error("supervisor: process won't die, leaking wait goroutine", "name", s.name, "pid", pid)
 			}
@@ -191,6 +217,9 @@ func (s *Supervisor) supervise(ctx context.Context) {
 			// Wait for process exit with timeout to prevent goroutine leak
 			select {
 			case <-exitCh:
+				if stderrLog != nil {
+					stderrLog.Close()
+				}
 			case <-time.After(10 * time.Second):
 				slog.Error("supervisor: process won't die, leaking wait goroutine", "name", s.name, "pid", pid)
 			}
@@ -198,6 +227,9 @@ func (s *Supervisor) supervise(ctx context.Context) {
 		}
 
 		elapsed := time.Since(startTime)
+		if stderrLog != nil {
+			stderrLog.Close()
+		}
 		slog.Info("supervisor: process exited", "name", s.name, "pid", pid, "elapsed", elapsed, "err", exitErr)
 
 		// Call onExit callback if set

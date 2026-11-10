@@ -7,6 +7,11 @@ type Source struct {
 	ID    int    `json:"id"`
 	Name  string `json:"name"`
 	Input string `json:"input"` // "" | "local" | "stream=<id>" | "RCA" | "aux"
+	// HasDAC is false when no DAC feeds this source on this unit, so only its
+	// analog RCA input can play here. Omitted when the source has a DAC.
+	// Derived from the detected hardware at startup (any persisted value is
+	// overwritten); never set by clients.
+	HasDAC *bool `json:"has_dac,omitempty"`
 }
 
 // Zone represents one of up to 36 amplified outputs.

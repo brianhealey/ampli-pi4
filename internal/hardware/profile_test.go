@@ -263,3 +263,32 @@ func TestDisplayTypeString(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceHasDAC(t *testing.T) {
+	single := &hardware.HardwareProfile{AvailablePhysicalOutputs: []int{0}}
+	full := hardware.MockProfile()
+	undetected := &hardware.HardwareProfile{}
+	var nilProfile *hardware.HardwareProfile
+
+	for src := 0; src < 4; src++ {
+		if got, want := single.SourceHasDAC(src), src == 0; got != want {
+			t.Errorf("single-DAC SourceHasDAC(%d) = %v, want %v", src, got, want)
+		}
+		if !full.SourceHasDAC(src) {
+			t.Errorf("mock profile SourceHasDAC(%d) = false, want true (full 4-DAC unit)", src)
+		}
+		if !undetected.SourceHasDAC(src) || !nilProfile.SourceHasDAC(src) {
+			t.Errorf("SourceHasDAC(%d) should not restrict without detected outputs", src)
+		}
+	}
+
+	if got := single.DigitalSources(); len(got) != 1 || got[0] != 0 {
+		t.Errorf("single-DAC DigitalSources() = %v, want [0]", got)
+	}
+	if got := full.DigitalSources(); len(got) != 4 {
+		t.Errorf("mock DigitalSources() = %v, want [0 1 2 3]", got)
+	}
+	if got := nilProfile.DigitalSources(); got != nil {
+		t.Errorf("nil profile DigitalSources() = %v, want nil", got)
+	}
+}
