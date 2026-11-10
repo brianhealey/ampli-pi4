@@ -40,6 +40,9 @@ type Supervisor struct {
 	// on this Supervisor.
 	onGiveUp func(reason string)
 
+	// sleepHook, if set, is told about every backoff sleep (tests).
+	sleepHook func(time.Duration)
+
 	// retryForever keeps restarting after maxFails fast failures instead of
 	// giving up, with the backoff still capped at maxBackoff. For processes
 	// whose failures are usually transient (network not up yet at boot). A
@@ -160,14 +163,14 @@ func (s *Supervisor) supervise(ctx context.Context) {
 		default:
 		}
 
-		// Check fail limit
+		// Check fail limit. Reaching it is normally caught right after the
+		// failure that reached it (see failedFast); this covers maxFails <= 0.
 		s.mu.Lock()
 		if s.failCount >= s.maxFails {
 			if !s.retryForever {
-				slog.Error("supervisor giving up after too many fast-fails", "name", s.name, "fails", s.failCount)
 				fails := s.failCount
 				s.mu.Unlock()
-				s.giveUp(fmt.Sprintf("exited or failed its health check %d times in a row", fails))
+				s.giveUpFailing(fails)
 				return
 			}
 			if s.failCount == s.maxFails {
@@ -198,7 +201,9 @@ func (s *Supervisor) supervise(ctx context.Context) {
 		if err := cmd.Start(); err != nil {
 			// Binary not found is permanent — no point retrying
 			if errors.Is(err, exec.ErrNotFound) || isNotFoundError(err) {
-				slog.Error("supervisor: binary not found, giving up", "name", s.name, "cmd", cmd.Path, "err", err)
+				// One ERROR per event: when a hook handles the give-up it
+				// logs the outcome itself.
+				s.logGiveUp("supervisor: binary not found, giving up", "cmd", cmd.Path, "err", err)
 				s.giveUp(fmt.Sprintf("%s not found", cmd.Path))
 				return
 			}
@@ -208,6 +213,11 @@ func (s *Supervisor) supervise(ctx context.Context) {
 			s.failCount++
 			backoff := s.backoff
 			s.backoff = minDuration(s.backoff*2, s.maxBackoff)
+			if fails, done := s.exhausted(); done {
+				s.mu.Unlock()
+				s.giveUpFailing(fails)
+				return
+			}
 			s.mu.Unlock()
 			s.sleepOrStop(ctx, backoff)
 			continue
@@ -328,6 +338,13 @@ func (s *Supervisor) supervise(ctx context.Context) {
 			// Exit status is irrelevant: VLC exits 0 when its URL fails.
 			s.failCount++
 			s.backoff = minDuration(s.backoff*2, s.maxBackoff)
+			// Decide before sleeping: a backoff that is not followed by a
+			// restart is just dead time (silence, for an audio bridge).
+			if fails, done := s.exhausted(); done {
+				s.mu.Unlock()
+				s.giveUpFailing(fails)
+				return
+			}
 		} else {
 			// Moderate failure — don't count as fast-fail but keep backoff
 			s.failCount = 0
@@ -341,6 +358,29 @@ func (s *Supervisor) supervise(ctx context.Context) {
 			s.sleepOrStop(ctx, backoff)
 		}
 	}
+}
+
+// exhausted reports whether the fail limit is reached and the supervisor
+// should stop restarting. Caller holds s.mu.
+func (s *Supervisor) exhausted() (fails int, done bool) {
+	return s.failCount, !s.retryForever && s.failCount >= s.maxFails
+}
+
+// giveUpFailing ends supervision after too many fast failures.
+func (s *Supervisor) giveUpFailing(fails int) {
+	s.logGiveUp("supervisor giving up after too many fast-fails", "fails", fails)
+	s.giveUp(fmt.Sprintf("exited or failed its health check %d times in a row", fails))
+}
+
+// logGiveUp logs a give-up at ERROR, or at INFO when an onGiveUp hook will
+// report the event (it logs its own ERROR with the consequence).
+func (s *Supervisor) logGiveUp(msg string, args ...any) {
+	args = append([]any{"name", s.name}, args...)
+	if s.onGiveUp != nil {
+		slog.Info(msg, args...)
+		return
+	}
+	slog.Error(msg, args...)
 }
 
 // giveUp runs the onGiveUp hook, if any.
@@ -384,6 +424,9 @@ func (s *Supervisor) killProcess(pid int) {
 
 // sleepOrStop sleeps for d or returns early if stop/ctx is signalled.
 func (s *Supervisor) sleepOrStop(ctx context.Context, d time.Duration) {
+	if s.sleepHook != nil {
+		s.sleepHook(d)
+	}
 	select {
 	case <-time.After(d):
 	case <-s.stopCh:

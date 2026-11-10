@@ -395,8 +395,13 @@ type fakeBridge struct {
 	stopped int
 }
 
-func (b *fakeBridge) Start(context.Context) error { b.mu.Lock(); b.started++; b.mu.Unlock(); return nil }
-func (b *fakeBridge) Stop() error                 { b.mu.Lock(); b.stopped++; b.mu.Unlock(); return nil }
+func (b *fakeBridge) Start(context.Context) error {
+	b.mu.Lock()
+	b.started++
+	b.mu.Unlock()
+	return nil
+}
+func (b *fakeBridge) Stop() error { b.mu.Lock(); b.stopped++; b.mu.Unlock(); return nil }
 func (b *fakeBridge) counts() (int, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -456,6 +461,7 @@ func TestEQBridge_HealthCheck(t *testing.T) {
 		f := newFakeCamilla(t, stateReply(state))
 		var st statusLog
 		b := newEQBridge(0, 0, "camilladsp", t.TempDir(), models.SourceEQ{Enabled: true}, &fakeBridge{}, st.report)
+		b.rt = directRT() // deterministic: no chrt on the test host
 		b.addr = f.addr()
 		err := b.checkHealth()
 		if (err != nil) != wantErr {
@@ -482,6 +488,7 @@ func TestEQBridge_FallsBackToALSALoopAfterRepeatedFailure(t *testing.T) {
 			var st statusLog
 			dir := t.TempDir()
 			b := newEQBridge(7, 0, bin, dir, *sampleEQForStreams(), fb, st.report)
+			b.rt = directRT() // deterministic: no chrt on the test host
 			ln, _ := net.Listen("tcp", "127.0.0.1:0") // closed port: GetState fails
 			b.addr = ln.Addr().String()
 			ln.Close()
@@ -529,6 +536,7 @@ func TestEQBridge_LiveUpdateOverWebsocket(t *testing.T) {
 	var st statusLog
 	dir := t.TempDir()
 	b := newEQBridge(2, 1, bin, dir, *sampleEQForStreams(), fb, st.report)
+	b.rt = directRT() // deterministic: no chrt on the test host
 	b.addr = f.addr()
 	b.tune = fastSupervisor
 	if err := b.Start(context.Background()); err != nil {
@@ -583,6 +591,7 @@ func TestEQBridge_LiveUpdateFailureRestarts(t *testing.T) {
 	})
 	dir := t.TempDir()
 	b := newEQBridge(3, 0, bin, dir, *sampleEQForStreams(), &fakeBridge{}, nil)
+	b.rt = directRT() // deterministic: no chrt on the test host
 	b.addr = f.addr()
 	b.tune = fastSupervisor
 	if err := b.Start(context.Background()); err != nil {

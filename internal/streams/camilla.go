@@ -34,20 +34,30 @@ func camillaPort(vsrc int) int { return camillaPortBase + vsrc }
 // camillaConfigName is the generated config, written to srcs/v<vsrc>/.
 const camillaConfigName = "camilladsp.yml"
 
-// Bridge supervision tuning. A CamillaDSP that cannot open its devices exits
-// at once (with status 0), so fast failures are the common failure mode; one
-// that stays up without processing is caught by the GetState health check.
-// With these values a broken bridge falls back to alsaloop within ~5 s (fast
-// exits) to ~15 s (alive but not processing).
+// Bridge supervision tuning. While CamillaDSP is failing the source is
+// silent (the alsaloop it replaced is already stopped), so the path to the
+// alsaloop fallback is kept short: one retry, then fall back.
+//
+// A CamillaDSP that cannot open its devices exits at once (often status 0):
+// exit (~0.2 s) + backoff 0.5 s + exit (~0.2 s) -> fallback after ~1 s.
+//
+// One that stays up without processing is caught by the GetState health
+// check: ticks at 1 s and 2 s after start (grace 0.5 s), each taking at most
+// camillaHealthTimeout (a port held by something that accepts but never
+// answers), so it is killed by ~2.5 s, plus ~0.1 s for it to exit on SIGTERM.
+// Worst case: 2.6 s + backoff 0.5 s + 2.6 s = ~5.7 s from start to the
+// fallback alsaloop starting (the supervisor gives up without sleeping after
+// the final failure). Only a CamillaDSP that ignored SIGTERM would add the
+// 3 s SIGKILL escalation per attempt (~11.9 s).
 const (
-	camillaMaxFails       = 3
+	camillaMaxFails       = 2
 	camillaFastFailSec    = 5.0
-	camillaInitialBackoff = 500 * time.Millisecond
-	camillaMaxBackoff     = 5 * time.Second
-	camillaHealthGrace    = 1 * time.Second
-	camillaHealthInterval = 2 * time.Second
+	camillaInitialBackoff = 250 * time.Millisecond // doubled before the first sleep: 0.5 s
+	camillaMaxBackoff     = 2 * time.Second
+	camillaHealthGrace    = 500 * time.Millisecond
+	camillaHealthInterval = 1 * time.Second
 	camillaHealthFailures = 2
-	camillaCmdTimeout     = 2 * time.Second
+	camillaHealthTimeout  = 500 * time.Millisecond // 127.0.0.1: CamillaDSP answers in ms
 	camillaPushTimeout    = 3 * time.Second
 )
 
@@ -192,6 +202,7 @@ type eqBridge struct {
 	addr          string
 	fallback      bridge // alsaloop for the same connection, started on give-up
 	report        eqReporter
+	rt            *rtLauncher       // real-time scheduling via chrt
 	tune          func(*Supervisor) // tests shorten timings
 
 	mu       sync.Mutex
@@ -211,6 +222,7 @@ func newEQBridge(vsrc, physSrc int, bin, configDir string, eq models.SourceEQ, f
 		addr:     fmt.Sprintf("127.0.0.1:%d", camillaPort(vsrc)),
 		fallback: fallback,
 		report:   report,
+		rt:       camillaRT,
 		eq:       *eq.Clone(),
 	}
 }
@@ -241,11 +253,11 @@ func (b *eqBridge) Start(ctx context.Context) error {
 		return nil
 	}
 	port := strconv.Itoa(camillaPort(b.vsrc))
-	bin, cfgPath := b.bin, b.cfgPath
+	bin, cfgPath, rt := b.bin, b.cfgPath, b.rt
 	sup := NewSupervisor(b.name(), func() *exec.Cmd {
 		// -l warn: CamillaDSP logs every websocket connection at info, and
-		// the health check connects every few seconds.
-		return exec.Command(bin, "-l", "warn", "-a", "127.0.0.1", "-p", port, cfgPath)
+		// the health check connects every second.
+		return rt.command(bin, camillaArgs(port, cfgPath)...)
 	})
 	sup.maxFails = camillaMaxFails
 	sup.fastFailSec = camillaFastFailSec
@@ -278,11 +290,16 @@ func (b *eqBridge) Start(ctx context.Context) error {
 	return sup.Start(ctx)
 }
 
+// camillaArgs is CamillaDSP's command line after the binary.
+func camillaArgs(port, cfgPath string) []string {
+	return []string{"-l", "warn", "-a", "127.0.0.1", "-p", port, cfgPath}
+}
+
 // checkHealth is the Supervisor health check: CamillaDSP's exit status is
 // not reliable (a missing ALSA device exits 0), so it must answer GetState
 // with a processing state on its websocket.
 func (b *eqBridge) checkHealth() error {
-	val, err := camillaCommand(b.addr, "GetState", camillaCmdTimeout)
+	val, err := camillaCommand(b.addr, "GetState", camillaHealthTimeout)
 	if err != nil {
 		return err
 	}
