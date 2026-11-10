@@ -61,7 +61,10 @@ func (c *Controller) eqStatusFor(src *models.Source, s *models.State) *models.EQ
 	if rt, ok := c.streams.EQStatus(src.ID); ok {
 		return &rt
 	}
-	return st(models.EQStateStarting, "waiting for the stream to connect")
+	// No bridge has reported yet: the coalesced stream sync that swaps in
+	// CamillaDSP runs just after this change (or the stream is still
+	// connecting).
+	return st(models.EQStateStarting, "starting CamillaDSP")
 }
 
 // withEQStatus returns s with each source's EQ status and the unit's EQ
